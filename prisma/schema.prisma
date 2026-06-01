@@ -1,0 +1,378 @@
+// ============================================
+// FREEBIZ DATABASE SCHEMA - PHASE 1 (MVP)
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  CUSTOMER
+  SP_SUPER_ADMIN
+  MOBILE_SP
+  SUPER_ADMIN
+}
+
+enum ServiceType {
+  FREE
+  DISCOUNTED
+}
+
+enum BookingStatus {
+  BOOKED
+  USED
+  EXPIRED
+  CANCELLED
+  REJECTED
+}
+
+enum ServiceMode {
+  IN_PERSON
+  ONLINE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+}
+
+enum OtpPurpose {
+  LOGIN
+  VERIFICATION
+}
+
+// ============================================
+// USER & AUTH TABLES
+// ============================================
+
+model User {
+  id                String    @id @default(uuid())
+  phone             String    @unique
+  email             String?   @unique
+  password          String?
+  role              UserRole
+  isActive          Boolean   @default(true)
+  mustChangePassword Boolean  @default(false)
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations - Customer
+  customerProfile   CustomerProfile?
+
+  // Relations - Service Provider (multiple users can belong to one SP)
+  serviceProviderId String?
+  serviceProvider   ServiceProviderProfile? @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+
+  // Relations - Super Admin
+  superAdminProfile SuperAdminProfile?
+
+  // Relations - Who created this SP user (for Mobile SP users)
+  createdByUserId   String?
+  createdByUser     User?     @relation("SPUserCreator", fields: [createdByUserId], references: [id])
+  createdSpUsers    User[]    @relation("SPUserCreator")
+
+  // Relations - OTP
+  otps              Otp[]
+
+  // Relations - Scanned QR Codes
+  scannedQRCodes    QRCode[]  @relation("ScannedBy")
+
+  @@index([phone])
+  @@index([serviceProviderId])
+  @@index([role])
+}
+
+model Otp {
+  id          String     @id @default(uuid())
+  userId      String?
+  phone       String
+  code        String
+  purpose     OtpPurpose
+  isVerified  Boolean    @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime   @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([phone, isVerified])
+  @@index([expiresAt])
+}
+
+// ============================================
+// CUSTOMER TABLES
+// ============================================
+
+model CustomerProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  name            String
+  age             Int?
+  gender          String?
+  profilePicture  String?
+  address         String?
+  city            String?
+  latitude        Float?
+  longitude       Float?
+  isProfileComplete Boolean @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings  Booking[]
+  ratings   Rating[]
+
+  @@index([city])
+  @@index([latitude, longitude])
+}
+
+// ============================================
+// SUPER ADMIN TABLE
+// ============================================
+
+model SuperAdminProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================
+// SERVICE PROVIDER TABLES
+// ============================================
+
+model ServiceProviderProfile {
+  id           String    @id @default(uuid())
+  businessName String
+  businessEmail String?
+  primaryContact String?
+  secondaryContact String?
+  address      String?   @db.Text
+  city         String?
+  latitude     Float?
+  longitude    Float?
+  isDisabled   Boolean   @default(false)
+  disabledAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  users        User[]
+  services     Service[]
+  subscriptions Subscription[]
+
+  @@index([isDisabled])
+  @@index([businessName])
+}
+
+model Service {
+  id                  String      @id @default(uuid())
+  serviceProviderId   String
+  serviceType         ServiceType  // FREE or DISCOUNTED
+  serviceDetail       String      @db.Text
+  contactNumber       String
+  address             String      @db.Text
+  city                String
+  latitude            Float
+  longitude           Float
+  specialInstructions String?     @db.Text
+  termsAndConditions  String?     @db.Text
+  serviceMode         ServiceMode @default(IN_PERSON)
+  isActive            Boolean     @default(true)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  // Discounted service pricing (null for FREE services)
+  actualPrice         Float?
+  discountedPrice     Float?
+  discountPercentage  Float?
+
+  // Relations
+  serviceProvider  ServiceProviderProfile @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+  media            ServiceMedia[]
+  slots            ServiceSlot[]
+  bookings         Booking[]
+
+  // Self-relation to link FREE services under DISCOUNTED services
+  parentId            String?
+  parentService       Service?    @relation("ServiceToService", fields: [parentId], references: [id], onDelete: SetNull)
+  subServices         Service[]   @relation("ServiceToService")
+
+  @@index([city])
+  @@index([isActive])
+  @@index([serviceType])
+  @@index([latitude, longitude])
+  @@index([parentId])
+}
+
+model ServiceMedia {
+  id          String    @id @default(uuid())
+  serviceId   String
+  mediaType   MediaType  // PHOTO or VIDEO
+  mediaUrl    String
+  thumbnailUrl String?   // For videos
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, mediaType])
+}
+
+model ServiceSlot {
+  id                   String   @id @default(uuid())
+  serviceId            String
+  startDate            DateTime @db.Date
+  endDate              DateTime @db.Date
+  dailyCount           Int
+  totalCount           Int
+  specialInstructions  String?  @db.Text
+  termsAndConditions   String?  @db.Text
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  service  Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([serviceId])
+  @@index([startDate, endDate])
+  @@index([isActive])
+}
+
+// ============================================
+// BOOKING TABLES
+// ============================================
+
+model Booking {
+  id                  String        @id @default(uuid())
+  bookingCode         String        @unique  // Human-readable: FB-20250501-XXXX
+  customerId          String
+  serviceId           String
+  slotId              String
+  bookingDate         DateTime      @db.Date  // Date customer selected
+  status              BookingStatus @default(BOOKED)
+  cancellationReason  String?       @db.Text
+  rejectionReason     String?       @db.Text
+  cancelledAt         DateTime?
+  expiredAt           DateTime?
+  usedAt              DateTime?
+  rejectedAt          DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  // Relations
+  customer    CustomerProfile      @relation(fields: [customerId], references: [id])
+  service     Service              @relation(fields: [serviceId], references: [id])
+  slot        ServiceSlot          @relation(fields: [slotId], references: [id])
+  qrCode      QRCode?
+  rating      Rating?
+
+  @@index([customerId, status])
+  @@index([serviceId, status])
+  @@index([slotId])
+  @@index([bookingDate])
+  @@index([status])
+  @@index([bookingDate, status])  // For expired job
+}
+
+model QRCode {
+  id            String    @id @default(uuid())
+  bookingId     String    @unique
+  qrData        String    @db.Text  // Encoded data for validation
+  qrImageUrl    String              // URL to QR image with FreeBiz logo
+  isUsed        Boolean   @default(false)
+  scannedAt     DateTime?
+  scannedByUserId String?           // SP user who scanned
+  createdAt     DateTime  @default(now())
+
+  // Relations
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  scannedByUser User?  @relation("ScannedBy", fields: [scannedByUserId], references: [id])
+
+  @@index([isUsed])
+  @@index([qrData])
+}
+
+// ============================================
+// RATING TABLE
+// ============================================
+
+model Rating {
+  id          String   @id @default(uuid())
+  bookingId   String   @unique
+  customerId  String
+  stars       Int      // 1-5
+  review      String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  booking  Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  customer CustomerProfile @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([stars])
+}
+
+// ============================================
+// SUBSCRIPTION TABLE (Manual Tracking)
+// ============================================
+
+model Subscription {
+  id                  String            @id @default(uuid())
+  serviceProviderId   String
+  startDate           DateTime          @db.Date
+  endDate             DateTime          @db.Date
+  status              SubscriptionStatus
+  notes               String?           @db.Text
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Relations
+  serviceProvider ServiceProviderProfile @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+
+  @@index([serviceProviderId])
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+// ============================================
+// AUDIT LOG TABLE (Optional - For Tracking)
+// ============================================
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String
+  entity      String
+  entityId    String?
+  oldValue    Json?
+  newValue    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as serviceController from '../controllers/service.controller';
 import { validateRequest } from '../middlewares/validate.middleware';
 import { authenticate } from '../middlewares/auth.middleware';
-import { spSuperAdminOnly } from '../middlewares/role.middleware';
+import { spOnly } from '../middlewares/role.middleware';
 import { getServicesSchema, createServiceSchema } from '../validators/service.validator';
 
 const router = Router();
@@ -13,7 +13,7 @@ router.get('/:id', serviceController.getServiceById);
 router.post(
   '/',
   authenticate,
-  spSuperAdminOnly,
+  spOnly,
   validateRequest(createServiceSchema),
   serviceController.createService
 );
@@ -21,7 +21,7 @@ router.post(
 router.put(
   '/:id',
   authenticate,
-  spSuperAdminOnly,
+  spOnly,
   validateRequest(createServiceSchema),
   serviceController.updateService
 );

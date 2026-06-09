@@ -24,6 +24,8 @@ export const createServiceSchema = z.object({
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),
   parentId: z.string().uuid().optional().nullable(),
+  startDate: z.string().optional().nullable(),
+  endDate: z.string().optional().nullable(),
   media: z.array(
     z.object({
       mediaType: z.enum(['PHOTO', 'VIDEO']),

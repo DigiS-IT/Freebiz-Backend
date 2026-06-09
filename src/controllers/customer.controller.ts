@@ -32,6 +32,22 @@ export const updateProfile = async (req: AuthRequest, res: Response, next: NextF
       }
     });
 
+    // Auto-align services to customer location for testing and verification
+    if (req.body.latitude && req.body.longitude) {
+      const lat = parseFloat(req.body.latitude);
+      const lng = parseFloat(req.body.longitude);
+      if (!isNaN(lat) && !isNaN(lng)) {
+        await prisma.service.updateMany({
+          data: {
+            latitude: lat,
+            longitude: lng,
+            city: req.body.city || profile.city || 'chennai',
+          }
+        });
+        console.log(`📌 Automatically aligned all services to customer's location: ${lat}, ${lng}`);
+      }
+    }
+
     res.status(200).json({ success: true, data: profile });
   } catch (error) {
     next(error);

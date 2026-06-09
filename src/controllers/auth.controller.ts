@@ -15,24 +15,27 @@ import { sendMail } from '../utils/mail';
 export const sendOtp = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { phone } = req.body;
+    
+    // Normalize to last 10 digits for database consistency
+    const normalizedPhone = phone.length >= 10 ? phone.substring(phone.length - 10) : phone;
 
     // Generate OTP (force '123456' for local development mock numbers)
-    const isMock = phone.includes('9999999999') || 
-                   phone.includes('1234567890') || 
-                   phone.includes('0000000000') || 
-                   phone.includes('8888888888') ||
-                   phone.includes('8248387253') || 
-                   phone.includes('9159387253') || 
-                   phone.includes('9159384606');
+    const isMock = normalizedPhone.includes('9999999999') || 
+                   normalizedPhone.includes('1234567890') || 
+                   normalizedPhone.includes('0000000000') || 
+                   normalizedPhone.includes('8888888888') ||
+                   normalizedPhone.includes('8248387253') || 
+                   normalizedPhone.includes('9159387253') || 
+                   normalizedPhone.includes('9159384606');
     const otp = isMock ? '123456' : generateOtp();
     const expiresAt = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '5') * 60 * 1000);
 
     // Find or create user
-    let user = await prisma.user.findUnique({ where: { phone } });
+    let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
 
     if (!user) {
       user = await prisma.user.create({
-        data: { phone, role: 'CUSTOMER' },
+        data: { phone: normalizedPhone, role: 'CUSTOMER' },
       });
     }
 
@@ -42,7 +45,7 @@ export const sendOtp = async (req: Request, res: Response, next: NextFunction) =
 
     // Invalidate previous OTPs
     await prisma.otp.updateMany({
-      where: { phone, isVerified: false },
+      where: { phone: normalizedPhone, isVerified: false },
       data: { isVerified: true }, // Mark as "used" to invalidate
     });
 
@@ -50,7 +53,7 @@ export const sendOtp = async (req: Request, res: Response, next: NextFunction) =
     await prisma.otp.create({
       data: {
         userId: user.id,
-        phone,
+        phone: normalizedPhone,
         code: otp,
         purpose: 'LOGIN',
         expiresAt,
@@ -58,7 +61,7 @@ export const sendOtp = async (req: Request, res: Response, next: NextFunction) =
     });
 
     // Send OTP via SMS
-    await sendSms(phone, `Your FreeBiz verification code is: ${otp}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 5} minutes.`);
+    await sendSms(normalizedPhone, `Your FreeBiz verification code is: ${otp}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 5} minutes.`);
 
     res.status(200).json({
       success: true,
@@ -74,7 +77,7 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
   try {
     const { phone, otp, name, age, gender } = req.body;
 
-    let verifiedPhone = phone;
+    let verifiedPhone = phone.length >= 10 ? phone.substring(phone.length - 10) : phone;
 
     // Check if OTP is a Firebase ID Token (starts with JWT header 'eyJ')
     if (otp && otp.startsWith('eyJ')) {
@@ -91,11 +94,12 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
         throw new AppError('Firebase token does not contain a valid phone number', 400);
       }
 
-      // Standardize/normalize phone number by stripping leading '+' for database consistency
-      verifiedPhone = rawPhone.startsWith('+') ? rawPhone.substring(1) : rawPhone;
+      // Normalize phone number to last 10 digits for database consistency
+      verifiedPhone = rawPhone.length >= 10 ? rawPhone.substring(rawPhone.length - 10) : rawPhone;
 
       // Standardize/normalize phone comparisons (matching suffix to tolerate varying country codes)
-      if (phone && !verifiedPhone.endsWith(phone)) {
+      const inputPhone = phone.length >= 10 ? phone.substring(phone.length - 10) : phone;
+      if (phone && !verifiedPhone.endsWith(inputPhone)) {
         throw new AppError('Verified Firebase phone number does not match submitted phone number', 400);
       }
 
@@ -112,9 +116,12 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
 
     } else {
       // Fallback: Traditional Database OTP Verification
+      const normalizedInputPhone = phone.length >= 10 ? phone.substring(phone.length - 10) : phone;
+      verifiedPhone = normalizedInputPhone;
+
       const validOtp = await prisma.otp.findFirst({
         where: {
-          phone,
+          phone: normalizedInputPhone,
           code: otp,
           purpose: 'LOGIN',
           isVerified: false,
@@ -204,12 +211,13 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
   try {
     const { userId, password } = req.body;
 
-    // Find user by ID or phone
+    // Find user by ID, phone, or email
     const user = await prisma.user.findFirst({
       where: {
         OR: [
           { id: userId },
-          { phone: userId }
+          { phone: userId },
+          { email: userId }
         ]
       },
       include: {
@@ -451,7 +459,36 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
       throw new AppError('Your account has been disabled. Please contact support.', 403);
     }
 
-    // Generate a temporary magic link token (expires in 15 mins)
+    // Firebase Auth REST API check
+    const webApiKey = process.env.FIREBASE_WEB_API_KEY;
+    if (webApiKey) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+      // Pass user email in query parameters to ensure we have it during verification on any device
+      const continueUrl = `${frontendUrl}/login/magic-verify?email=${encodeURIComponent(email)}`;
+
+      const firebaseRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${webApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requestType: 'EMAIL_SIGNIN',
+          email,
+          continueUrl,
+          canHandleCodeInApp: true,
+        }),
+      });
+
+      if (!firebaseRes.ok) {
+        const errorData = await firebaseRes.json();
+        throw new AppError(errorData.error?.message || 'Failed to send Firebase magic link', 400);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Magic link sent successfully. Please check your inbox.',
+      });
+    }
+
+    // Fallback: Generate a temporary magic link token (expires in 15 mins)
     const magicToken = jwt.sign(
       { userId: user.id, purpose: 'magic-link' },
       process.env.JWT_SECRET!,
@@ -459,28 +496,64 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
     );
 
     // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
+    // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
     const magicLink = `${frontendUrl}/login/magic-verify?token=${magicToken}`;
 
     // Send the email
     const subject = 'Your FreeBiz Sign-In Magic Link';
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);">
-        <div style="text-align: center; margin-bottom: 25px;">
-          <h2 style="color: #059669; font-weight: 800; font-size: 24px; margin: 0; tracking-tight: -0.025em;">FreeBiz</h2>
-          <p style="color: #059669; font-size: 12px; font-weight: 600; margin: 2px 0 0 0; text-transform: uppercase; letter-spacing: 0.05em;">Service Marketplace</p>
-        </div>
-        <p style="font-size: 16px; color: #334155; line-height: 1.6; margin-top: 0;">Hello,</p>
-        <p style="font-size: 16px; color: #334155; line-height: 1.6;">You requested a secure magic link to sign in to your FreeBiz account. Please click the button below to sign in:</p>
-        <div style="text-align: center; margin: 35px 0;">
-          <a href="${magicLink}" style="background-color: #059669; color: white; padding: 14px 32px; text-decoration: none; font-weight: 700; border-radius: 12px; display: inline-block; box-shadow: 0 10px 15px -3px rgba(5, 150, 105, 0.3);">Sign In to FreeBiz</a>
-        </div>
-        <p style="font-size: 14px; color: #64748b; line-height: 1.6;">Alternatively, you can copy and paste the following link directly into your browser:</p>
-        <p style="font-size: 12px; color: #2563eb; word-break: break-all; background-color: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-family: monospace;">${magicLink}</p>
-        <p style="font-size: 14px; color: #64748b; line-height: 1.6; margin-top: 25px;">This link will expire in 15 minutes. If you did not make this request, you can safely ignore this email.</p>
-        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 30px 0;" />
-        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">© 2025 FreeBiz. All rights reserved.</p>
-      </div>
+      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 40px 10px;">
+        <tr>
+          <td align="center">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+              
+              <!-- Header Section -->
+              <tr>
+                <td align="center" style="padding: 30px 40px 20px 40px; border-bottom: 1px solid #f1f5f9;">
+                  <div style="display: inline-block; padding: 10px; border-radius: 12px; background: linear-gradient(135deg, #34d399, #14b8a6); margin-bottom: 15px;">
+                    <span style="font-size: 24px; color: #ffffff; font-weight: bold; line-height: 1;">FB</span>
+                  </div>
+                  <h2 style="color: #0f172a; font-weight: 800; font-size: 24px; margin: 0; letter-spacing: -0.025em;">FreeBiz</h2>
+                  <p style="color: #059669; font-size: 11px; font-weight: 700; margin: 4px 0 0 0; text-transform: uppercase; letter-spacing: 0.1em;">Service Marketplace</p>
+                </td>
+              </tr>
+
+              <!-- Content Section -->
+              <tr>
+                <td style="padding: 40px;">
+                  <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 16px 0;">Hello,</p>
+                  <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 30px 0;">We received a request to log in to your FreeBiz account securely. Please click the button below to sign in:</p>
+                  
+                  <!-- CTA Button -->
+                  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 30px 0;">
+                    <tr>
+                      <td align="center">
+                        <a href="${magicLink}" target="_blank" style="background-color: #059669; color: #ffffff !important; padding: 14px 32px; text-decoration: none !important; font-weight: 700; border-radius: 12px; display: inline-block; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(5, 150, 105, 0.2), 0 2px 4px -1px rgba(5, 150, 105, 0.1);">Sign In to FreeBiz</a>
+                      </td>
+                    </tr>
+                  </table>
+                  
+                  <p style="font-size: 14px; color: #64748b; line-height: 1.6; margin: 0 0 10px 0;">Alternatively, you can copy and paste the following link directly into your web browser:</p>
+                  <p style="font-size: 12px; color: #0284c7; word-break: break-all; background-color: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; margin: 0 0 30px 0;">
+                    <a href="${magicLink}" target="_blank" style="color: #0284c7 !important; text-decoration: underline;">${magicLink}</a>
+                  </p>
+                  
+                  <p style="font-size: 13px; color: #94a3b8; line-height: 1.6; margin: 0;">This secure link is valid for <strong>15 minutes</strong>. If you did not request this login, you can safely ignore this email.</p>
+                </td>
+              </tr>
+
+              <!-- Footer Section -->
+              <tr>
+                <td align="center" style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #f1f5f9;">
+                  <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; 2025 FreeBiz. All rights reserved.</p>
+                </td>
+              </tr>
+
+            </table>
+          </td>
+        </tr>
+      </table>
     `;
 
     await sendMail(email, subject, html);
@@ -496,23 +569,60 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
 
 export const magicVerify = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { token } = req.body;
+    const { token, email } = req.body;
 
-    // Verify token
-    let decoded: any;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET!);
-    } catch (err) {
-      throw new AppError('Invalid or expired Magic Link token.', 401);
+    let userEmail = email;
+    const isJwt = token.startsWith('eyJ') && token.split('.').length === 3;
+
+    if (!isJwt) {
+      const webApiKey = process.env.FIREBASE_WEB_API_KEY;
+      if (!webApiKey) {
+        throw new AppError('Firebase Web API Key is not configured on the server.', 500);
+      }
+      if (!email) {
+        throw new AppError('Email is required for Firebase verification.', 400);
+      }
+
+      // Verify the oobCode using Firebase REST API
+      const firebaseRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=${webApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          oobCode: token,
+        }),
+      });
+
+      if (!firebaseRes.ok) {
+        const errorData = await firebaseRes.json();
+        throw new AppError(errorData.error?.message || 'Invalid or expired Magic Link.', 401);
+      }
+    } else {
+      // Verify token as JWT
+      let decoded: any;
+      try {
+        decoded = jwt.verify(token, process.env.JWT_SECRET!);
+      } catch (err) {
+        throw new AppError('Invalid or expired Magic Link token.', 401);
+      }
+
+      if (decoded.purpose !== 'magic-link') {
+        throw new AppError('Invalid token purpose.', 400);
+      }
+
+      // Find user from decoded JWT
+      const dbUser = await prisma.user.findUnique({
+        where: { id: decoded.userId },
+      });
+      if (!dbUser) {
+        throw new AppError('User not found.', 404);
+      }
+      userEmail = dbUser.email!;
     }
 
-    if (decoded.purpose !== 'magic-link') {
-      throw new AppError('Invalid token purpose.', 400);
-    }
-
-    // Find user
+    // Find user by email
     const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
+      where: { email: userEmail },
       include: {
         serviceProvider: true,
         superAdminProfile: true,
@@ -520,7 +630,7 @@ export const magicVerify = async (req: Request, res: Response, next: NextFunctio
     });
 
     if (!user) {
-      throw new AppError('User not found.', 404);
+      throw new AppError('User not found with this email.', 404);
     }
 
     if (!user.isActive) {

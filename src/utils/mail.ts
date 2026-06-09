@@ -9,16 +9,38 @@ export const sendMail = async (to: string, subject: string, html: string) => {
 
   let transporter;
 
+  // Print email contents to terminal for easy developer access (e.g. copying magic links)
+  if (process.env.NODE_ENV === 'development' || !host) {
+    console.log('\n=================== [DEVELOPMENT MAIL LOG] ===================');
+    console.log(`To:      ${to}`);
+    console.log(`Subject: ${subject}`);
+    
+    // Extract any hyperlinks (like the magic verification link) for quick copy-pasting
+    const linkMatch = html.match(/href="([^"]+)"/);
+    if (linkMatch && linkMatch[1]) {
+      console.log(`🔗 Magic Link: ${linkMatch[1]}`);
+    }
+    console.log('==============================================================\n');
+  }
+
   if (host && user && pass) {
+    // Check if configuration targets Gmail SMTP
+    const isGmail = host.toLowerCase().includes('gmail') || host.toLowerCase().includes('google');
+
     // Real SMTP configuration from .env
     transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
+      ...(isGmail 
+        ? { service: 'gmail' } 
+        : { host, port, secure: port === 465 }
+      ),
       auth: {
         user,
         pass,
       },
+      tls: {
+        // Do not fail on invalid certificates (especially helpful in dev/local environments)
+        rejectUnauthorized: false
+      }
     });
   } else {
     // Dev Fallback: Create Ethereal test account or log to console
@@ -35,13 +57,7 @@ export const sendMail = async (to: string, subject: string, html: string) => {
         },
       });
     } catch (err) {
-      console.error('❌ Failed to create Ethereal test account, printing email to console instead:', err);
-      console.log('========================================');
-      console.log(`To: ${to}`);
-      console.log(`Subject: ${subject}`);
-      console.log(`HTML:`);
-      console.log(html);
-      console.log('========================================');
+      console.error('❌ Failed to create Ethereal test account, printed email to console above.');
       return;
     }
   }
@@ -60,3 +76,4 @@ export const sendMail = async (to: string, subject: string, html: string) => {
     console.log(`📧 Ethereal Preview URL: ${previewUrl}`);
   }
 };
+

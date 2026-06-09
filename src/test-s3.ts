@@ -1,4 +1,4 @@
-import { S3Client, GetBucketLocationCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -15,15 +15,21 @@ const s3Client = new S3Client({
 const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME || 'special-nest-images-1984';
 
 async function main() {
-  console.log('Testing S3 configuration...');
+  console.log('Listing S3 objects...');
   console.log('Bucket:', BUCKET_NAME);
-  console.log('Region:', process.env.AWS_REGION);
 
   try {
-    const loc = await s3Client.send(new GetBucketLocationCommand({ Bucket: BUCKET_NAME }));
-    console.log('Bucket location:', loc.LocationConstraint);
+    const data = await s3Client.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
+    console.log('Objects:');
+    if (data.Contents) {
+      data.Contents.forEach((obj) => {
+        console.log(` - ${obj.Key} (Size: ${obj.Size})`);
+      });
+    } else {
+      console.log('No objects found in bucket.');
+    }
   } catch (error) {
-    console.error('Error getting bucket location:', error);
+    console.error('Error listing objects:', error);
   }
 }
 

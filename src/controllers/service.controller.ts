@@ -26,6 +26,24 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
       serviceMode: 'IN_PERSON',
     };
 
+    // Filter out expired services and those not started yet
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayDate = new Date(todayStr);
+    where.AND = [
+      {
+        OR: [
+          { endDate: null },
+          { endDate: { gte: todayDate } }
+        ]
+      },
+      {
+        OR: [
+          { startDate: null },
+          { startDate: { lte: todayDate } }
+        ]
+      }
+    ];
+
     // Filter by service type
     if (serviceType === 'FREE') {
       where.serviceType = 'FREE';
@@ -119,6 +137,17 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           take: 1,
           select: { mediaUrl: true },
         },
+        subServices: {
+          where: { isActive: true },
+          include: {
+            media: {
+              where: { mediaType: 'PHOTO' },
+              orderBy: { order: 'asc' },
+              take: 1,
+              select: { mediaUrl: true },
+            },
+          },
+        },
         slots: {
           where: {
             isActive: true,
@@ -164,6 +193,8 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             s.latitude,
             s.longitude
           );
+          // Only show services within 10 km
+          if (distance > 10) return null;
           distanceText = formatDistance(distance);
         }
 
@@ -190,6 +221,8 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           longitude: s.longitude,
           specialInstructions: s.specialInstructions,
           termsAndConditions: s.termsAndConditions,
+          startDate: s.startDate,
+          endDate: s.endDate,
           // Discount info
           actualPrice: s.actualPrice,
           discountedPrice: s.discountedPrice,
@@ -208,8 +241,23 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             endDate: slot.endDate,
             dailyCount: slot.dailyCount,
           })),
+          // Sub-services (free services linked under discount service)
+          subServices: s.subServices ? s.subServices.map((sub: any) => ({
+            id: sub.id,
+            serviceType: sub.serviceType,
+            serviceDetail: sub.serviceDetail,
+            contactNumber: sub.contactNumber,
+            address: sub.address,
+            city: sub.city,
+            latitude: sub.latitude,
+            longitude: sub.longitude,
+            startDate: sub.startDate,
+            endDate: sub.endDate,
+            thumbnailUrl: sub.media[0]?.mediaUrl || null,
+          })) : [],
         };
-      });
+      })
+      .filter((s: any) => s !== null && s.hasActiveSlot);
 
     // Sort by distance if coordinates provided
     if (latitude && longitude) {
@@ -310,6 +358,8 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
         longitude: service.longitude,
         specialInstructions: service.specialInstructions,
         termsAndConditions: service.termsAndConditions,
+        startDate: service.startDate,
+        endDate: service.endDate,
         actualPrice: service.actualPrice,
         discountedPrice: service.discountedPrice,
         discountPercentage: service.discountPercentage,
@@ -388,6 +438,8 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       actualPrice,
       discountedPrice,
       parentId,
+      startDate,
+      endDate,
       media,
     } = req.body;
 
@@ -412,6 +464,8 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
         discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
         discountPercentage,
         parentId: serviceType === 'FREE' ? (parentId || null) : null,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
       },
     });
 
@@ -425,6 +479,24 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
           order: item.order ?? idx,
         })),
       });
+    }
+    if (serviceType === 'DISCOUNTED') {
+      const sp = await prisma.serviceProviderProfile.findUnique({
+        where: { id: spId },
+        select: { businessName: true },
+      });
+      if (sp?.businessName === 'Super Service Provider') {
+        await prisma.service.updateMany({
+          where: {
+            serviceProviderId: spId,
+            serviceType: 'FREE',
+          },
+          data: {
+            parentId: service.id,
+            isActive: true,
+          },
+        });
+      }
     }
 
     const newService = await prisma.service.findUnique({
@@ -463,6 +535,8 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
       actualPrice,
       discountedPrice,
       parentId,
+      startDate,
+      endDate,
       media,
     } = req.body;
 
@@ -496,6 +570,8 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
         discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
         discountPercentage,
         parentId: serviceType === 'FREE' ? (parentId || null) : null,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
       },
     });
 
@@ -513,6 +589,24 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
           order: item.order ?? idx,
         })),
       });
+    }
+    if (serviceType === 'DISCOUNTED') {
+      const sp = await prisma.serviceProviderProfile.findUnique({
+        where: { id: spId },
+        select: { businessName: true },
+      });
+      if (sp?.businessName === 'Super Service Provider') {
+        await prisma.service.updateMany({
+          where: {
+            serviceProviderId: spId,
+            serviceType: 'FREE',
+          },
+          data: {
+            parentId: service.id,
+            isActive: true,
+          },
+        });
+      }
     }
 
     const updatedService = await prisma.service.findUnique({

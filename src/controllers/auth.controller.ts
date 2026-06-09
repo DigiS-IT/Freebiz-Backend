@@ -478,7 +478,7 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
       });
 
       if (!firebaseRes.ok) {
-        const errorData = await firebaseRes.json();
+        const errorData = await firebaseRes.json() as any;
         throw new AppError(errorData.error?.message || 'Failed to send Firebase magic link', 400);
       }
 
@@ -594,7 +594,7 @@ export const magicVerify = async (req: Request, res: Response, next: NextFunctio
       });
 
       if (!firebaseRes.ok) {
-        const errorData = await firebaseRes.json();
+        const errorData = await firebaseRes.json() as any;
         throw new AppError(errorData.error?.message || 'Invalid or expired Magic Link.', 401);
       }
     } else {

@@ -36,4 +36,5 @@ export const magicLoginSchema = z.object({
 
 export const magicVerifySchema = z.object({
   token: z.string().min(1, 'Token is required'),
+  email: z.string().email('Invalid email address').optional(),
 });

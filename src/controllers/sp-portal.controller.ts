@@ -452,4 +452,54 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
   }
 };
 
+// Update password of a standard Service Provider user (staff) under the Super SP's business profile
+export const updateSpUserPassword = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    if (!newPassword || newPassword.trim().length < 6) {
+      throw new AppError('Password must be at least 6 characters long', 400);
+    }
+
+    // Verify that this user belongs to the same service provider and has MOBILE_SP role
+    const staffUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+      },
+    });
+
+    if (!staffUser) {
+      throw new AppError('Staff user not found or does not belong to your business', 404);
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    // Update password
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        password: hashedPassword,
+        mustChangePassword: true, // force staff to change it on their next login if they wish
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff password updated successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 

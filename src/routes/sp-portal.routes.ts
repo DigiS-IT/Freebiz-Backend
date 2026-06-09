@@ -13,6 +13,7 @@ router.get('/bookings', authenticate, spOnly, spController.getSpBookings);
 router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpProfile);
 router.get('/profile', authenticate, spOnly, spController.getSpProfile);
 router.post('/staff', authenticate, spSuperAdminOnly, spController.createSpUser);
+router.get('/staff', authenticate, spSuperAdminOnly, spController.getSpUsers);
 
 // Slot management
 router.get('/slots', authenticate, spOnly, spController.getSpSlots);

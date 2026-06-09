@@ -35,7 +35,14 @@ export const getSpBookings = async (req: AuthRequest, res: Response, next: NextF
 
     const bookings = await prisma.booking.findMany({
       where: { service: { serviceProviderId: spId } },
-      include: { customer: true, service: true },
+      include: {
+        customer: {
+          include: {
+            user: { select: { phone: true, email: true } }
+          }
+        },
+        service: true
+      },
       orderBy: { createdAt: 'desc' }
     });
     res.status(200).json({ success: true, data: bookings });
@@ -406,4 +413,43 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
     next(error);
   }
 };
+
+// Get list of standard Service Provider users (staff) under the Super SP's business profile
+export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    const users = await prisma.user.findMany({
+      where: {
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+      },
+      select: {
+        id: true,
+        phone: true,
+        email: true,
+        role: true,
+        isActive: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: users,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 

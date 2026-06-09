@@ -234,6 +234,12 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       throw new AppError('Please use OTP login for customer accounts', 400);
     }
 
+    // Block MOBILE_SP (staff) from logging in via the web portal
+    const source = (req.body as any).source;
+    if (source === 'web' && user.role === 'MOBILE_SP') {
+      throw new AppError('Staff Service Provider accounts can only log in via the FreeBiz mobile app.', 403);
+    }
+
     if (!user.isActive) {
       throw new AppError('Your account has been disabled. Please contact support.', 403);
     }

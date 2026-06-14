@@ -468,7 +468,7 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
     // Firebase Auth REST API check
     const webApiKey = process.env.FIREBASE_WEB_API_KEY;
     if (webApiKey) {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+      const frontendUrl = process.env.FRONTEND_URL || req.get('origin') || 'http://localhost:3001';
       // Pass user email in query parameters to ensure we have it during verification on any device
       const continueUrl = `${frontendUrl}/login/magic-verify?email=${encodeURIComponent(email)}`;
 
@@ -503,7 +503,7 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
 
     // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
     // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+    const frontendUrl = process.env.FRONTEND_URL || req.get('origin') || 'http://localhost:3001';
     const magicLink = `${frontendUrl}/login/magic-verify?token=${magicToken}`;
 
     // Send the email

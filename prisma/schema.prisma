@@ -70,6 +70,8 @@ model User {
   lastLoginAt       DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+  magicToken        String?   @unique
+  magicTokenExpires DateTime?
 
   // Relations - Customer
   customerProfile   CustomerProfile?

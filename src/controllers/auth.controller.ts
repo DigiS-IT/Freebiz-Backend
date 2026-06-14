@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { prisma } from '../app';
 import { AppError, generateOtp } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
@@ -61,7 +62,7 @@ export const sendOtp = async (req: Request, res: Response, next: NextFunction) =
     });
 
     // Send OTP via SMS
-    await sendSms(normalizedPhone, `Your FreeBiz verification code is: ${otp}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 5} minutes.`);
+    await sendSms(normalizedPhone, `Your FreeBie verification code is: ${otp}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 5} minutes.`);
 
     res.status(200).json({
       success: true,
@@ -237,7 +238,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     // Block MOBILE_SP (staff) from logging in via the web portal
     const source = (req.body as any).source;
     if (source === 'web' && user.role === 'MOBILE_SP') {
-      throw new AppError('Staff Service Provider accounts can only log in via the FreeBiz mobile app.', 403);
+      throw new AppError('Staff Service Provider accounts can only log in via the FreeBie mobile app.', 403);
     }
 
     if (!user.isActive) {
@@ -465,49 +466,28 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
       throw new AppError('Your account has been disabled. Please contact support.', 403);
     }
 
-    // Firebase Auth REST API check
-    const webApiKey = process.env.FIREBASE_WEB_API_KEY;
-    if (webApiKey) {
-      const frontendUrl = process.env.FRONTEND_URL || req.get('origin') || 'http://localhost:3001';
-      // Pass user email in query parameters to ensure we have it during verification on any device
-      const continueUrl = `${frontendUrl}/login/magic-verify?email=${encodeURIComponent(email)}`;
+    // Generate custom random token (like in Reshape Your Life)
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
-      const firebaseRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${webApiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestType: 'EMAIL_SIGNIN',
-          email,
-          continueUrl,
-          canHandleCodeInApp: true,
-        }),
-      });
+    // Update user record with magic token and expiry
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        magicToken: token,
+        magicTokenExpires: expires,
+      },
+    });
 
-      if (!firebaseRes.ok) {
-        const errorData = await firebaseRes.json() as any;
-        throw new AppError(errorData.error?.message || 'Failed to send Firebase magic link', 400);
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: 'Magic link sent successfully. Please check your inbox.',
-      });
+    // Build the frontend Magic Link verification URL
+    let frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+    if (frontendUrl.includes(',')) {
+      frontendUrl = frontendUrl.split(',')[0].trim();
     }
+    const magicLink = `${frontendUrl}/login/magic-verify?token=${token}`;
 
-    // Fallback: Generate a temporary magic link token (expires in 15 mins)
-    const magicToken = jwt.sign(
-      { userId: user.id, purpose: 'magic-link' },
-      process.env.JWT_SECRET!,
-      { expiresIn: '15m' }
-    );
-
-    // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
-    // Build the frontend Magic Link verification URL (Next.js runs on PORT 3001)
-    const frontendUrl = process.env.FRONTEND_URL || req.get('origin') || 'http://localhost:3001';
-    const magicLink = `${frontendUrl}/login/magic-verify?token=${magicToken}`;
-
-    // Send the email
-    const subject = 'Your FreeBiz Sign-In Magic Link';
+    // Send the email using the local custom template
+    const subject = 'Your FreeBie Sign-In Magic Link';
     const html = `
       <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 40px 10px;">
         <tr>
@@ -520,7 +500,7 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
                   <div style="display: inline-block; padding: 10px; border-radius: 12px; background: linear-gradient(135deg, #34d399, #14b8a6); margin-bottom: 15px;">
                     <span style="font-size: 24px; color: #ffffff; font-weight: bold; line-height: 1;">FB</span>
                   </div>
-                  <h2 style="color: #0f172a; font-weight: 800; font-size: 24px; margin: 0; letter-spacing: -0.025em;">FreeBiz</h2>
+                  <h2 style="color: #0f172a; font-weight: 800; font-size: 24px; margin: 0; letter-spacing: -0.025em;">FreeBie</h2>
                   <p style="color: #059669; font-size: 11px; font-weight: 700; margin: 4px 0 0 0; text-transform: uppercase; letter-spacing: 0.1em;">Service Marketplace</p>
                 </td>
               </tr>
@@ -529,13 +509,13 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
               <tr>
                 <td style="padding: 40px;">
                   <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 16px 0;">Hello,</p>
-                  <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 30px 0;">We received a request to log in to your FreeBiz account securely. Please click the button below to sign in:</p>
+                  <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 30px 0;">We received a request to log in to your FreeBie account securely. Please click the button below to sign in:</p>
                   
                   <!-- CTA Button -->
                   <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 30px 0;">
                     <tr>
                       <td align="center">
-                        <a href="${magicLink}" target="_blank" style="background-color: #059669; color: #ffffff !important; padding: 14px 32px; text-decoration: none !important; font-weight: 700; border-radius: 12px; display: inline-block; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(5, 150, 105, 0.2), 0 2px 4px -1px rgba(5, 150, 105, 0.1);">Sign In to FreeBiz</a>
+                        <a href="${magicLink}" target="_blank" style="background-color: #059669; color: #ffffff !important; padding: 14px 32px; text-decoration: none !important; font-weight: 700; border-radius: 12px; display: inline-block; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(5, 150, 105, 0.2), 0 2px 4px -1px rgba(5, 150, 105, 0.1);">Sign In to FreeBie</a>
                       </td>
                     </tr>
                   </table>
@@ -552,7 +532,7 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
               <!-- Footer Section -->
               <tr>
                 <td align="center" style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #f1f5f9;">
-                  <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; 2025 FreeBiz. All rights reserved.</p>
+                  <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; 2025 FreeBie. All rights reserved.</p>
                 </td>
               </tr>
 
@@ -575,73 +555,37 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
 
 export const magicVerify = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { token, email } = req.body;
+    const { token } = req.body;
 
-    let userEmail = email;
-    const isJwt = token.startsWith('eyJ') && token.split('.').length === 3;
-
-    if (!isJwt) {
-      const webApiKey = process.env.FIREBASE_WEB_API_KEY;
-      if (!webApiKey) {
-        throw new AppError('Firebase Web API Key is not configured on the server.', 500);
-      }
-      if (!email) {
-        throw new AppError('Email is required for Firebase verification.', 400);
-      }
-
-      // Verify the oobCode using Firebase REST API
-      const firebaseRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=${webApiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          oobCode: token,
-        }),
-      });
-
-      if (!firebaseRes.ok) {
-        const errorData = await firebaseRes.json() as any;
-        throw new AppError(errorData.error?.message || 'Invalid or expired Magic Link.', 401);
-      }
-    } else {
-      // Verify token as JWT
-      let decoded: any;
-      try {
-        decoded = jwt.verify(token, process.env.JWT_SECRET!);
-      } catch (err) {
-        throw new AppError('Invalid or expired Magic Link token.', 401);
-      }
-
-      if (decoded.purpose !== 'magic-link') {
-        throw new AppError('Invalid token purpose.', 400);
-      }
-
-      // Find user from decoded JWT
-      const dbUser = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-      });
-      if (!dbUser) {
-        throw new AppError('User not found.', 404);
-      }
-      userEmail = dbUser.email!;
+    if (!token) {
+      throw new AppError('Magic Link verification token is required.', 400);
     }
 
-    // Find user by email
+    // Find the user by magicToken
     const user = await prisma.user.findUnique({
-      where: { email: userEmail },
+      where: { magicToken: token },
       include: {
         serviceProvider: true,
         superAdminProfile: true,
       },
     });
 
-    if (!user) {
-      throw new AppError('User not found with this email.', 404);
+    if (!user || !user.magicTokenExpires || user.magicTokenExpires < new Date()) {
+      throw new AppError('Invalid or expired Magic Link.', 401);
     }
 
     if (!user.isActive) {
       throw new AppError('Your account has been disabled. Please contact support.', 403);
     }
+
+    // Invalidate the token after verification
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        magicToken: null,
+        magicTokenExpires: null,
+      },
+    });
 
     // Generate tokens
     const tokens = generateTokens(user.id, user.phone, user.role, user.mustChangePassword);
@@ -670,7 +614,6 @@ export const magicVerify = async (req: Request, res: Response, next: NextFunctio
         user: {
           id: user.id,
           phone: user.phone,
-          email: user.email,
           role: user.role,
           mustChangePassword: user.mustChangePassword,
           ...profileData,

@@ -24,7 +24,7 @@ async function main() {
       mustChangePassword: false,
       superAdminProfile: {
         create: {
-          name: 'FreeBiz Super Admin',
+          name: 'FreeBie Super Admin',
         },
       },
     },

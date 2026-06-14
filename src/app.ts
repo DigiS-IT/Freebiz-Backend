@@ -86,7 +86,7 @@ async function main() {
 
     // Start server
     app.listen(Number(PORT), '0.0.0.0', () => {
-      console.log(`🚀 FreeBiz API Server running on port ${PORT} (listening on all interfaces)`);
+      console.log(`🚀 FreeBie API Server running on port ${PORT} (listening on all interfaces)`);
       console.log(`📡 API available at http://localhost:${PORT}${API_PREFIX}`);
       console.log(`🔧 Environment: ${process.env.NODE_ENV}`);
     });

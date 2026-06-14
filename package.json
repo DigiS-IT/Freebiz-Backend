@@ -1,7 +1,7 @@
 {
-  "name": "freebie-backend",
+  "name": "freebiz-backend",
   "version": "1.0.0",
-  "description": "FreeBie - Free & Discounted Service Marketplace Backend",
+  "description": "FreeBiz - Free & Discounted Service Marketplace Backend",
   "main": "dist/app.js",
   "scripts": {
     "dev": "nodemon",

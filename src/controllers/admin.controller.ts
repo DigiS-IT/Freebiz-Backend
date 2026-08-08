@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/helpers';
 import { UserRole, SubscriptionStatus } from '@prisma/client';
 
@@ -75,48 +75,56 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
     // 3. Top performing service providers by booking count
     const providers = await prisma.serviceProviderProfile.findMany({
       include: {
+        users: { select: { phone: true, email: true } },
         services: {
           include: { bookings: true },
         },
       },
     });
 
+    const grandTotalBookings = Math.max(1, totalBookings);
+
     const topSPs = providers
-      .map((sp) => ({
-        id: sp.id,
-        name: sp.businessName,
-        city: sp.services[0]?.city || 'Unknown',
-        totalBookings: sp.services.reduce((acc, s) => acc + s.bookings.length, 0),
-        activeServices: sp.services.filter((s) => s.isActive).length,
-      }))
+      .map((sp) => {
+        const totalB = sp.services.reduce((acc, s) => acc + s.bookings.length, 0);
+        return {
+          id: sp.id,
+          name: sp.businessName,
+          ownerName: sp.users[0]?.phone ? `SP-${sp.users[0].phone.slice(-4)}` : 'Business Owner',
+          city: sp.city || sp.services[0]?.city || 'Chennai',
+          totalBookings: totalB,
+          contributionPct: grandTotalBookings > 0 ? Math.round((totalB / grandTotalBookings) * 100) : 0,
+          activeServices: sp.services.filter((s) => s.isActive).length,
+        };
+      })
       .sort((a, b) => b.totalBookings - a.totalBookings)
       .slice(0, 5);
 
-    // 4. Service Distribution: bookings per service name across all providers
+    // 4. Service Distribution: Free Services, Discounted Services, Other Services
     const allServices = await prisma.service.findMany({
       include: { bookings: true },
     });
 
-    const serviceDistributionMap = new Map<string, number>();
-    allServices.forEach((s) => {
-      const name = s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service';
-      serviceDistributionMap.set(name, (serviceDistributionMap.get(name) || 0) + s.bookings.length);
-    });
+    const freeCount = allServices.filter((s) => s.serviceType === 'FREE').length;
+    const discountedCount = allServices.filter((s) => s.serviceType === 'DISCOUNTED').length;
+    const otherCount = allServices.filter((s) => s.serviceType !== 'FREE' && s.serviceType !== 'DISCOUNTED').length;
+    const totalSvcCount = Math.max(1, freeCount + discountedCount + otherCount);
 
-    const serviceDistribution = Array.from(serviceDistributionMap.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 6);
+    const serviceDistribution = [
+      { name: 'Free Services', count: freeCount, pct: Math.round((freeCount / totalSvcCount) * 100), color: '#10B981' },
+      { name: 'Discounted Services', count: discountedCount, pct: Math.round((discountedCount / totalSvcCount) * 100), color: '#3B82F6' },
+      { name: 'Other Services', count: otherCount, pct: Math.round((otherCount / totalSvcCount) * 100), color: '#F59E0B' },
+    ];
 
-    // 5. Customer Demographics
+    // 5. Customer Demographics (Gender, Age Groups, City Distribution from Database)
     const males = await prisma.customerProfile.count({ where: { gender: 'Male' } });
     const females = await prisma.customerProfile.count({ where: { gender: 'Female' } });
     const others = await prisma.customerProfile.count({ where: { gender: 'Other' } });
     const totalWithGender = males + females + others;
     const gender = [
-      { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 55, color: 'bg-teal-500' },
-      { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 40, color: 'bg-rose-500' },
-      { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 5, color: 'bg-amber-500' },
+      { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 0, color: 'bg-teal-500' },
+      { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 0, color: 'bg-rose-500' },
+      { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 0, color: 'bg-amber-500' },
     ];
 
     const age18_25 = await prisma.customerProfile.count({ where: { age: { gte: 18, lte: 25 } } });
@@ -125,37 +133,26 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
     const age46Plus = await prisma.customerProfile.count({ where: { age: { gte: 46 } } });
     const totalWithAge = age18_25 + age26_35 + age36_45 + age46Plus;
     const ageGroups = [
-      { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 30 },
-      { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 35 },
-      { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 20 },
-      { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 15 },
+      { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 0 },
+      { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 0 },
+      { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 0 },
+      { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 0 },
     ];
 
+    // City Regional Distribution directly from Customer profiles in Database
     const cityGroups = await prisma.customerProfile.groupBy({
       by: ['city'],
-      _count: {
-        id: true,
-      },
-      orderBy: {
-        _count: {
-          id: 'desc',
-        },
-      },
-      take: 5,
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 7,
     });
+
     const cities = cityGroups
       .filter((cg) => cg.city)
       .map((cg) => ({
         name: cg.city as string,
         count: cg._count.id,
       }));
-    if (cities.length === 0) {
-      cities.push(
-        { name: 'Bangalore', count: 0 },
-        { name: 'Mumbai', count: 0 },
-        { name: 'Delhi', count: 0 }
-      );
-    }
 
     const demographics = { gender, ageGroups, cities };
 
@@ -172,12 +169,12 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     const conversionFunnel = [
       { label: 'Total Slots', count: totalSlotsVal, pct: 100 },
-      { label: 'Booked', count: bookedVal, pct: totalSlotsVal > 0 ? Math.round((bookedVal / totalSlotsVal) * 100) : 70 },
-      { label: 'Used', count: usedVal, pct: bookedVal > 0 ? Math.round((usedVal / bookedVal) * 100) : 70 },
-      { label: 'Rated', count: ratedVal, pct: usedVal > 0 ? Math.round((ratedVal / usedVal) * 100) : 56 },
+      { label: 'Booked', count: bookedVal, pct: totalSlotsVal > 0 ? Math.round((bookedVal / totalSlotsVal) * 100) : 0 },
+      { label: 'Used', count: usedVal, pct: bookedVal > 0 ? Math.round((usedVal / bookedVal) * 100) : 0 },
+      { label: 'Rated', count: ratedVal, pct: usedVal > 0 ? Math.round((ratedVal / usedVal) * 100) : 0 },
     ];
 
-    // 7. Revenue Growth Trend
+    // 7. Revenue Growth Trend directly from Subscriptions table in Database
     const subscriptions = await prisma.subscription.findMany({
       orderBy: { startDate: 'asc' },
     });
@@ -201,25 +198,55 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
         };
       });
 
-    // 8. Top Booking Services
+    // 8. Detailed Top Booking Services directly from Service & Booking tables in Database
     const topServices = await prisma.service.findMany({
       include: {
         bookings: true,
         serviceProvider: true,
       },
     });
-    const formattedTopServices = topServices
-      .map((s) => ({
-        name: s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service',
-        type: s.serviceType.toLowerCase(),
-        spName: s.serviceProvider.businessName,
-        bookingsCount: s.bookings.length,
-      }))
-      .sort((a, b) => b.bookingsCount - a.bookingsCount)
-      .slice(0, 5);
 
-    // 9. Sparkline last 7 days registrations
+    const formattedTopServices = await Promise.all(
+      topServices
+        .map(async (s) => {
+          // Query last 7 days bookings per day for this service from DB
+          const trend: number[] = [];
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            d.setHours(0, 0, 0, 0);
+            const dEnd = new Date(d);
+            dEnd.setDate(dEnd.getDate() + 1);
+
+            const dayCount = await prisma.booking.count({
+              where: {
+                serviceId: s.id,
+                createdAt: { gte: d, lt: dEnd },
+              },
+            });
+            trend.push(dayCount);
+          }
+
+          return {
+            id: s.id,
+            name: s.serviceDetail.split(' - ')[0] || (s.serviceType === 'FREE' ? 'Free Service Pass' : 'Discounted Service Session'),
+            spName: s.serviceProvider.businessName,
+            description: s.specialInstructions || s.serviceDetail || 'Service offered by provider',
+            type: s.serviceType,
+            bookingsCount: s.bookings.length,
+            trend,
+          };
+        })
+    );
+
+    const sortedTopServices = formattedTopServices
+      .sort((a, b) => b.bookingsCount - a.bookingsCount)
+      .slice(0, 6);
+
+    // 9. Sparkline last 7 days registrations directly from CustomerProfile table in Database
     const sparkline: number[] = [];
+    const sparkline7Days: { date: string; count: number }[] = [];
+
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -236,7 +263,48 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
         },
       });
       sparkline.push(count);
+      const dateLabel = d.toLocaleDateString('en-US', { weekday: 'short' });
+      sparkline7Days.push({ date: dateLabel, count });
     }
+
+    // 10. Recent Activities Stream directly from Booking & Service tables in Database
+    const recentBookings = await prisma.booking.findMany({
+      take: 6,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        customer: { select: { name: true } },
+        service: { select: { serviceDetail: true, serviceProvider: { select: { businessName: true } } } },
+      },
+    });
+
+    const recentServices = await prisma.service.findMany({
+      take: 4,
+      orderBy: { createdAt: 'desc' },
+      include: { serviceProvider: { select: { businessName: true } } },
+    });
+
+    const recentActivities = [
+      ...recentBookings.map((b) => ({
+        id: `act-b-${b.id}`,
+        type: b.status === 'USED' ? 'CONFIRMED_CHECKIN' : 'CREATED_BOOKING',
+        title: b.status === 'USED' 
+          ? `Booking Confirmed & Claimed by ${b.service.serviceProvider.businessName}`
+          : `New Booking Created by ${b.customer.name}`,
+        subtitle: `${b.service.serviceDetail} • Code: ${b.bookingCode}`,
+        time: b.createdAt.toISOString(),
+        icon: b.status === 'USED' ? 'CheckCircle' : 'Ticket',
+        badgeColor: b.status === 'USED' ? 'emerald' : 'sky',
+      })),
+      ...recentServices.map((s) => ({
+        id: `act-s-${s.id}`,
+        type: 'CREATED_SERVICE',
+        title: `New Service Listed by ${s.serviceProvider.businessName}`,
+        subtitle: `${s.serviceDetail} (${s.serviceType})`,
+        time: s.createdAt.toISOString(),
+        icon: 'PlusCircle',
+        badgeColor: 'amber',
+      })),
+    ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 8);
 
     res.status(200).json({
       success: true,
@@ -259,8 +327,10 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
       demographics,
       conversionFunnel,
       revenueGrowth,
-      topServices: formattedTopServices,
+      topServices: sortedTopServices,
       sparkline,
+      sparkline7Days,
+      recentActivities,
     });
   } catch (error) {
     next(error);
@@ -365,6 +435,7 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
     const newUser = await prisma.user.create({
       data: {
         phone,
+        email: businessEmail ? businessEmail.trim() : null,
         password: hashedPassword,
         role: UserRole.SP_SUPER_ADMIN,
         mustChangePassword: true,
@@ -389,29 +460,121 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
   }
 };
 
-// Enable/Disable Service Provider Profile
-export const updateProviderActive = async (req: Request, res: Response, next: NextFunction) => {
+// Update Service Provider Profile & Status
+export const updateProvider = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { spId, isActive } = req.body;
+    const {
+      spId,
+      isActive,
+      businessName,
+      businessEmail,
+      primaryContact,
+      secondaryContact,
+      address,
+      city,
+      latitude,
+      longitude,
+      newPassword,
+    } = req.body;
 
     if (!spId) {
       throw new AppError('spId is required', 400);
     }
 
+    const updateData: any = {};
+
+    if (isActive !== undefined) {
+      updateData.isDisabled = !isActive;
+      updateData.disabledAt = isActive ? null : new Date();
+    }
+
+    if (businessName !== undefined && businessName !== null) updateData.businessName = businessName.trim();
+    if (businessEmail !== undefined && businessEmail !== null) updateData.businessEmail = businessEmail.trim();
+    if (primaryContact !== undefined && primaryContact !== null) updateData.primaryContact = primaryContact.trim();
+    if (secondaryContact !== undefined && secondaryContact !== null) updateData.secondaryContact = secondaryContact.trim();
+    if (address !== undefined && address !== null) updateData.address = address.trim();
+    if (city !== undefined && city !== null) updateData.city = city.trim();
+    if (latitude !== undefined && latitude !== null && latitude !== '') updateData.latitude = parseFloat(latitude.toString());
+    if (longitude !== undefined && longitude !== null && longitude !== '') updateData.longitude = parseFloat(longitude.toString());
+
     const updated = await prisma.serviceProviderProfile.update({
       where: { id: spId },
-      data: {
-        isDisabled: !isActive,
-        disabledAt: isActive ? null : new Date(),
-      },
+      data: updateData,
     });
+
+    // Update password for user account(s) if newPassword is provided
+    let passwordUpdated = false;
+    if (newPassword && typeof newPassword === 'string' && newPassword.trim()) {
+      if (newPassword.trim().length < 6) {
+        throw new AppError('New password must be at least 6 characters', 400);
+      }
+      const hashedPassword = await bcrypt.hash(newPassword.trim(), 12);
+      
+      const spProfile = await prisma.serviceProviderProfile.findUnique({ where: { id: spId } });
+      const phonesToMatch = [spProfile?.primaryContact, spProfile?.secondaryContact].filter(Boolean) as string[];
+      const emailsToMatch = [spProfile?.businessEmail].filter(Boolean) as string[];
+
+      await prisma.user.updateMany({
+        where: {
+          OR: [
+            { serviceProviderId: spId },
+            ...(phonesToMatch.length > 0 ? [{ phone: { in: phonesToMatch } }] : []),
+            ...(emailsToMatch.length > 0 ? [{ email: { in: emailsToMatch } }] : []),
+          ],
+        },
+        data: {
+          password: hashedPassword,
+          mustChangePassword: false,
+        },
+      });
+      passwordUpdated = true;
+    }
+
+    // Sync User record phone & email if primaryContact or businessEmail provided
+    if (primaryContact || businessEmail) {
+      const userUpdate: any = {};
+      if (primaryContact && primaryContact.trim()) userUpdate.phone = primaryContact.trim();
+      if (businessEmail && businessEmail.trim()) userUpdate.email = businessEmail.trim();
+
+      if (Object.keys(userUpdate).length > 0) {
+        await prisma.user.updateMany({
+          where: { serviceProviderId: spId },
+          data: userUpdate,
+        });
+      }
+    }
+
+    // Sync updated address/city/contact/lat/lng to associated Service records if provided
+    if (address || city || primaryContact || latitude || longitude) {
+      await prisma.service.updateMany({
+        where: { serviceProviderId: spId },
+        data: {
+          ...(address && { address: address.trim() }),
+          ...(city && { city: city.trim() }),
+          ...(primaryContact && { contactNumber: primaryContact.trim() }),
+          ...(latitude && { latitude: parseFloat(latitude.toString()) }),
+          ...(longitude && { longitude: parseFloat(longitude.toString()) }),
+        },
+      });
+    }
 
     res.status(200).json({
       success: true,
-      message: `Provider successfully ${isActive ? 'activated' : 'deactivated'}`,
+      message: passwordUpdated
+        ? 'Service Provider details and password updated successfully'
+        : isActive !== undefined && Object.keys(updateData).length === 2
+        ? `Provider successfully ${isActive ? 'activated' : 'deactivated'}`
+        : 'Service Provider profile updated successfully',
       provider: {
         id: updated.id,
         name: updated.businessName,
+        businessEmail: updated.businessEmail,
+        primaryContact: updated.primaryContact,
+        secondaryContact: updated.secondaryContact,
+        address: updated.address,
+        city: updated.city,
+        latitude: updated.latitude,
+        longitude: updated.longitude,
         isActive: !updated.isDisabled,
       },
     });
@@ -419,6 +582,8 @@ export const updateProviderActive = async (req: Request, res: Response, next: Ne
     next(error);
   }
 };
+
+export const updateProviderActive = updateProvider;
 
 // ============================================
 // CUSTOMERS
@@ -451,6 +616,10 @@ export const getCustomers = async (req: Request, res: Response, next: NextFuncti
       id: c.id,
       name: c.name,
       phone: c.user?.phone || 'No Phone',
+      email: c.user?.email || null,
+      address: c.address || null,
+      profilePicture: c.profilePicture || null,
+      isProfileComplete: c.isProfileComplete,
       age: c.age,
       gender: c.gender,
       city: c.city || 'Unknown',

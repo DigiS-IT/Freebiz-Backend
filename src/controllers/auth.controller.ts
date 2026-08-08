@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError, generateOtp } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 import { sendSms } from '../config/sms';
@@ -212,13 +212,36 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
   try {
     const { userId, password } = req.body;
 
-    // Find user by ID, phone, or email
-    const user = await prisma.user.findFirst({
+    if (!userId || !password) {
+      throw new AppError('User ID / Phone and password are required', 400);
+    }
+
+    const cleanUserId = userId.toString().trim();
+    const phoneDigitsOnly = cleanUserId.replace(/\D/g, '');
+    const phoneSuffix = phoneDigitsOnly.length >= 7 ? phoneDigitsOnly.slice(-10) : '';
+
+    // Find user by ID, phone (exact or suffix match), email, OR service provider details
+    let user = await prisma.user.findFirst({
       where: {
         OR: [
-          { id: userId },
-          { phone: userId },
-          { email: userId }
+          { id: cleanUserId },
+          { phone: cleanUserId },
+          { email: { equals: cleanUserId, mode: 'insensitive' } },
+          ...(phoneSuffix ? [{ phone: { endsWith: phoneSuffix } }] : []),
+          {
+            serviceProvider: {
+              OR: [
+                { businessName: { equals: cleanUserId, mode: 'insensitive' } },
+                { businessEmail: { equals: cleanUserId, mode: 'insensitive' } },
+                { primaryContact: cleanUserId },
+                { secondaryContact: cleanUserId },
+                ...(phoneSuffix ? [
+                  { primaryContact: { endsWith: phoneSuffix } },
+                  { secondaryContact: { endsWith: phoneSuffix } },
+                ] : [])
+              ]
+            }
+          }
         ]
       },
       include: {
@@ -226,6 +249,35 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
         superAdminProfile: true,
       },
     });
+
+    // Fallback: If user not found directly, check if a ServiceProviderProfile matches cleanUserId and fetch its linked user
+    if (!user) {
+      const spProfile = await prisma.serviceProviderProfile.findFirst({
+        where: {
+          OR: [
+            { businessName: { equals: cleanUserId, mode: 'insensitive' } },
+            { businessEmail: { equals: cleanUserId, mode: 'insensitive' } },
+            { primaryContact: cleanUserId },
+            { secondaryContact: cleanUserId },
+            ...(phoneSuffix ? [
+              { primaryContact: { endsWith: phoneSuffix } },
+              { secondaryContact: { endsWith: phoneSuffix } },
+            ] : [])
+          ]
+        },
+        include: { users: true },
+      });
+
+      if (spProfile && spProfile.users.length > 0) {
+        user = await prisma.user.findUnique({
+          where: { id: spProfile.users[0].id },
+          include: {
+            serviceProvider: true,
+            superAdminProfile: true,
+          },
+        });
+      }
+    }
 
     if (!user) {
       throw new AppError('Invalid credentials', 401);
@@ -245,8 +297,17 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       throw new AppError('Your account has been disabled. Please contact support.', 403);
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password!);
+    if (!user.password) {
+      throw new AppError('Invalid credentials', 401);
+    }
+
+    // Verify password (check raw and trimmed password)
+    const cleanPassword = password.toString();
+    let isPasswordValid = await bcrypt.compare(cleanPassword, user.password);
+    if (!isPasswordValid && cleanPassword.trim() !== cleanPassword) {
+      isPasswordValid = await bcrypt.compare(cleanPassword.trim(), user.password);
+    }
+
     if (!isPasswordValid) {
       throw new AppError('Invalid credentials', 401);
     }
@@ -448,15 +509,47 @@ export const logout = async (req: AuthRequest, res: Response, next: NextFunction
 export const magicLogin = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { email } = req.body;
+    if (!email) {
+      throw new AppError('Email address is required.', 400);
+    }
 
-    // Find the user in database by email
-    const user = await prisma.user.findUnique({
-      where: { email },
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // 1. Find the user in database by email (case-insensitive)
+    let user = await prisma.user.findFirst({
+      where: {
+        email: { equals: normalizedEmail, mode: 'insensitive' },
+      },
       include: {
         serviceProvider: true,
         superAdminProfile: true,
       },
     });
+
+    // 2. Fallback: Search ServiceProviderProfile by businessEmail if user was created without user.email set
+    if (!user) {
+      const spProfile = await prisma.serviceProviderProfile.findFirst({
+        where: {
+          businessEmail: { equals: normalizedEmail, mode: 'insensitive' },
+        },
+        include: {
+          users: true,
+        },
+      });
+
+      if (spProfile && spProfile.users.length > 0) {
+        // Link the first user associated with this service provider
+        const spUser = spProfile.users[0];
+        user = await prisma.user.update({
+          where: { id: spUser.id },
+          data: { email: normalizedEmail },
+          include: {
+            serviceProvider: true,
+            superAdminProfile: true,
+          },
+        });
+      }
+    }
 
     if (!user) {
       throw new AppError('No account found with this email address.', 404);
@@ -571,7 +664,7 @@ export const magicVerify = async (req: Request, res: Response, next: NextFunctio
     });
 
     if (!user || !user.magicTokenExpires || user.magicTokenExpires < new Date()) {
-      throw new AppError('Invalid or expired Magic Link.', 401);
+      throw new AppError('This magic link is invalid or has already been used. Please request a new magic link.', 401);
     }
 
     if (!user.isActive) {

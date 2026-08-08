@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError, validateQRData } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 

@@ -1,10 +1,10 @@
 import nodemailer from 'nodemailer';
 
 export const sendMail = async (to: string, subject: string, html: string) => {
-  const host = process.env.SMTP_HOST;
+  const host = process.env.SMTP_HOST?.trim();
   const port = parseInt(process.env.SMTP_PORT || '587');
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const user = process.env.SMTP_USER?.replace(/[\r\n"']/g, '').trim();
+  const pass = process.env.SMTP_PASS?.replace(/[\r\n"'\s]/g, '').trim();
   const from = process.env.SMTP_FROM || '"FreeBie" <noreply@freebie.com>';
 
   let transporter;
@@ -62,18 +62,27 @@ export const sendMail = async (to: string, subject: string, html: string) => {
     }
   }
 
-  const info = await transporter.sendMail({
-    from,
-    to,
-    subject,
-    html,
-  });
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject,
+      html,
+    });
 
-  console.log(`✅ Mail sent successfully! MessageId: ${info.messageId}`);
-  
-  const previewUrl = nodemailer.getTestMessageUrl(info);
-  if (previewUrl) {
-    console.log(`📧 Ethereal Preview URL: ${previewUrl}`);
+    console.log(`✅ Mail sent successfully! MessageId: ${info.messageId}`);
+    
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) {
+      console.log(`📧 Ethereal Preview URL: ${previewUrl}`);
+    }
+  } catch (err: any) {
+    console.error(`⚠️ Could not send email via SMTP: ${err.message || err}`);
+    if (process.env.NODE_ENV === 'development') {
+      console.log('ℹ️ [Dev Mode] Proceeding successfully since the link was printed to the console above.');
+    } else {
+      throw err;
+    }
   }
 };
 

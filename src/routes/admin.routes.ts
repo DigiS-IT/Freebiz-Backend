@@ -11,7 +11,7 @@ router.get('/dashboard', authenticate, superAdminOnly, adminController.getDashbo
 // Providers management
 router.get('/providers', authenticate, superAdminOnly, adminController.getProviders);
 router.post('/providers', authenticate, superAdminOnly, adminController.createProvider);
-router.put('/providers', authenticate, superAdminOnly, adminController.updateProviderActive);
+router.put('/providers', authenticate, superAdminOnly, adminController.updateProvider);
 
 // Customers management
 router.get('/customers', authenticate, superAdminOnly, adminController.getCustomers);

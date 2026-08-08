@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError, calculateDistance, formatDistance, getDiscountTier, paginate } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 
@@ -9,9 +9,11 @@ import { AuthRequest } from '../middlewares/auth.middleware';
 
 export const getServices = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const {
+      const {
       serviceType,
       minDiscount,
+      maxDiscount,
+      maxDistance,
       city,
       latitude,
       longitude,
@@ -50,10 +52,15 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
     } else if (serviceType === 'DISCOUNTED') {
       where.serviceType = 'DISCOUNTED';
       
-      // Filter by minimum discount percentage
-      if (minDiscount) {
-        const minDisc = parseFloat(minDiscount as string);
-        where.discountPercentage = { gte: minDisc };
+      // Filter by discount percentage range
+      if (minDiscount !== undefined || maxDiscount !== undefined) {
+        where.discountPercentage = {};
+        if (minDiscount !== undefined) {
+          where.discountPercentage.gte = parseFloat(minDiscount as string);
+        }
+        if (maxDiscount !== undefined) {
+          where.discountPercentage.lte = parseFloat(maxDiscount as string);
+        }
       }
     }
 
@@ -77,6 +84,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
     if (latitude && longitude) {
       const userLat = parseFloat(latitude as string);
       const userLng = parseFloat(longitude as string);
+      const maxDistMeters = maxDistance ? parseFloat(maxDistance as string) : 10000;
 
       if (!isNaN(userLat) && !isNaN(userLng)) {
         // Safe check and enable PostGIS extension in DB
@@ -87,7 +95,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
         }
 
         try {
-          // Pre-filter service IDs within a 10 km (10,000 meters) boundary using PostGIS directly in SQL
+          // Pre-filter service IDs within boundary using PostGIS directly in SQL
           const nearbyServices = await prisma.$queryRaw<any[]>`
             SELECT s.id, 
                    ST_DistanceSphere(
@@ -101,7 +109,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
               AND ST_DistanceSphere(
                     ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326),
                     ST_SetSRID(ST_MakePoint(${userLng}, ${userLat}), 4326)
-                  ) <= 10000 -- 10km in meters
+                  ) <= ${maxDistMeters}
             ORDER BY distance ASC
           `;
 
@@ -618,6 +626,36 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
       success: true,
       message: 'Service updated successfully',
       data: updatedService,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteService = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const spId = req.user!.serviceProviderId;
+
+    if (!spId) {
+      throw new AppError('Service provider profile not found', 400);
+    }
+
+    const existingService = await prisma.service.findFirst({
+      where: { id, serviceProviderId: spId }
+    });
+
+    if (!existingService) {
+      throw new AppError('Service not found or unauthorized', 404);
+    }
+
+    await prisma.service.delete({
+      where: { id }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Service deleted successfully'
     });
   } catch (error) {
     next(error);

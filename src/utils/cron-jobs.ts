@@ -1,4 +1,4 @@
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 
 /**
  * Cron job to mark bookings as EXPIRED when the booking date passes

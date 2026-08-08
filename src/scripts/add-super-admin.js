@@ -39,6 +39,16 @@ async function main() {
       role: 'SUPER_ADMIN',
       isActive: true,
       mustChangePassword: false,
+      superAdminProfile: {
+        upsert: {
+          create: {
+            name: name.trim() || 'FreeBiz Super Admin',
+          },
+          update: {
+            name: name.trim() || 'FreeBiz Super Admin',
+          },
+        },
+      },
     },
     create: {
       phone: phone.trim(),

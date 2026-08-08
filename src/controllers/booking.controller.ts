@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError, generateBookingCode, generateQRData, paginate } from '../utils/helpers';
 import { generateQRCode } from '../utils/qr-generator';
 import { AuthRequest } from '../middlewares/auth.middleware';
@@ -97,7 +97,7 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
       }
 
       // Generate booking code
-      const bookingCode = await generateBookingCode(new Date(bookingDate));
+      const bookingCode = await generateBookingCode(tx, new Date(bookingDate));
 
       // Create booking
       const booking = await tx.booking.create({
@@ -179,7 +179,11 @@ export const getMyBookings = async (req: AuthRequest, res: Response, next: NextF
 
     const where: any = { customerId: customer.id };
 
+    const VALID_STATUSES = ['BOOKED', 'USED', 'EXPIRED', 'CANCELLED', 'REJECTED'];
     if (status && status !== 'ALL') {
+      if (!VALID_STATUSES.includes(status as string)) {
+        throw new AppError(`Invalid status filter. Allowed values: ${VALID_STATUSES.join(', ')}, ALL`, 400);
+      }
       where.status = status;
     }
 

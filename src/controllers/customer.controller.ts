@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { prisma } from '../app';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 
@@ -24,29 +24,19 @@ export const getProfile = async (req: AuthRequest, res: Response, next: NextFunc
 
 export const updateProfile = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const profile = await prisma.customerProfile.update({
+    const profile = await prisma.customerProfile.upsert({
       where: { userId: req.user!.id },
-      data: {
+      update: {
         ...req.body,
-        isProfileComplete: true
-      }
+        isProfileComplete: true,
+      },
+      create: {
+        userId: req.user!.id,
+        name: req.body.name || 'User',
+        ...req.body,
+        isProfileComplete: true,
+      },
     });
-
-    // Auto-align services to customer location for testing and verification
-    if (req.body.latitude && req.body.longitude) {
-      const lat = parseFloat(req.body.latitude);
-      const lng = parseFloat(req.body.longitude);
-      if (!isNaN(lat) && !isNaN(lng)) {
-        await prisma.service.updateMany({
-          data: {
-            latitude: lat,
-            longitude: lng,
-            city: req.body.city || profile.city || 'chennai',
-          }
-        });
-        console.log(`📌 Automatically aligned all services to customer's location: ${lat}, ${lng}`);
-      }
-    }
 
     res.status(200).json({ success: true, data: profile });
   } catch (error) {

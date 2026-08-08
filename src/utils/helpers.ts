@@ -1,4 +1,5 @@
-import { randomBytes } from 'crypto';
+import { randomInt } from 'crypto';
+import { Prisma } from '@prisma/client';
 
 export class AppError extends Error {
   statusCode: number;
@@ -21,20 +22,17 @@ export const generateOtp = (): string => {
   return num.toString();
 };
 
-export const generateBookingCode = async (bookingDate: Date): Promise<string> => {
-  const { prisma } = require('../app');
+export const generateBookingCode = async (tx: Prisma.TransactionClient, bookingDate: Date): Promise<string> => {
   const dateStr = bookingDate.toISOString().slice(0, 10).replace(/-/g, '');
-  
-  // Find the count of bookings for this date
-  const count = await prisma.booking.count({
-    where: {
-      bookingDate,
-      bookingCode: { startsWith: `FB-${dateStr}` },
-    },
-  });
 
-  const sequence = (count + 1).toString().padStart(4, '0');
-  return `FB-${dateStr}-${sequence}`;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const sequence = randomInt(1000, 9999).toString().padStart(4, '0');
+    const code = `FB-${dateStr}-${sequence}`;
+    const existing = await tx.booking.findUnique({ where: { bookingCode: code } });
+    if (!existing) return code;
+  }
+
+  throw new AppError('Could not generate a unique booking code. Please try again.', 500);
 };
 
 export const calculateDistance = (
@@ -87,8 +85,9 @@ export const validateQRData = (qrData: string, secret: string): { bookingCode: s
 };
 
 export const paginate = (page: number = 1, limit: number = 10) => {
-  const skip = (page - 1) * limit;
-  return { skip, take: limit };
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)));
+  return { skip: (safePage - 1) * safeLimit, take: safeLimit };
 };
 
 export const getDiscountPercentage = (actualPrice: number, discountedPrice: number): number => {

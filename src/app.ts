@@ -9,13 +9,11 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import { PrismaClient } from '@prisma/client';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middlewares/error.middleware';
 import { setupExpiredBookingsJob } from './utils/cron-jobs';
+import { prisma } from './lib/prisma';
 import './services/firebase.service'; // Initialize Firebase
-
-export const prisma = new PrismaClient();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,12 +28,29 @@ app.use(helmet());
 
 // CORS configuration
 const corsOptions: cors.CorsOptions = {
-  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3001'],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+
+    const configuredOrigins = process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+      : [];
+
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
+    if (configuredOrigins.includes(origin) || isLocalhost || process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'Accept', 'Origin'],
 };
 app.use(cors(corsOptions));
+
+// Handle favicon requests cleanly
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // Parse JSON bodies
 app.use(express.json({ limit: '10mb' }));

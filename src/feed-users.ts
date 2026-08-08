@@ -57,6 +57,16 @@ async function main() {
       role: UserRole.SUPER_ADMIN,
       isActive: true,
       mustChangePassword: false,
+      superAdminProfile: {
+        upsert: {
+          create: {
+            name: 'FreeBiz Super Admin',
+          },
+          update: {
+            name: 'FreeBiz Super Admin',
+          },
+        },
+      },
     },
     create: {
       phone: adminPhone,
@@ -68,9 +78,9 @@ async function main() {
       superAdminProfile: {
         create: {
           name: 'FreeBiz Super Admin',
-        }
-      }
-    }
+        },
+      },
+    },
   });
   console.log(`\n👑 1. SUPER_ADMIN User Inserted:`);
   console.log(`   - Phone: ${superAdmin.phone}`);

@@ -11,6 +11,15 @@ import uploadRoutes from './upload.routes';
 
 const router = Router();
 
+// API Root info endpoint
+router.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    message: 'FreeBiz API v1 is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Public routes
 router.use('/auth', authRoutes);
 

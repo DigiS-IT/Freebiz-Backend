@@ -464,6 +464,11 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
       const spUser = p.users[0];
       const service = p.services[0];
       const activeSub = p.subscriptions[0];
+      let daysRemaining = 0;
+      if (activeSub?.endDate) {
+        const diffTime = new Date(activeSub.endDate).getTime() - new Date().getTime();
+        daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      }
 
       return {
         id: p.id,
@@ -486,9 +491,11 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
         })),
         subscription: activeSub
           ? {
+              id: activeSub.id,
               startDate: activeSub.startDate.toISOString().split('T')[0],
               endDate: activeSub.endDate.toISOString().split('T')[0],
               isActive: activeSub.status === SubscriptionStatus.ACTIVE && activeSub.endDate >= new Date(),
+              daysRemaining,
             }
           : null,
       };
@@ -503,7 +510,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
 // Create a new SP Super Admin User (Super Service Provider)
 export const createProvider = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone, password, businessName, businessEmail, primaryContact, secondaryContact, address, city, latitude, longitude } = req.body;
+    const { phone, password, businessName, businessEmail, primaryContact, secondaryContact, address, city, latitude, longitude, startDate, endDate } = req.body;
 
     if (!phone || !password || !businessName?.trim() || !businessEmail?.trim() || !address?.trim() || !city?.trim() || latitude === undefined || longitude === undefined) {
       throw new AppError('Phone, password, business name, business email, address, city, latitude, and longitude are all required', 400);
@@ -544,6 +551,23 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
         serviceProviderId: profile.id,
       },
     });
+
+    // Create initial subscription if startDate and endDate are provided
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      await prisma.subscription.create({
+        data: {
+          serviceProviderId: profile.id,
+          startDate: start,
+          endDate: end,
+          status: end >= today ? SubscriptionStatus.ACTIVE : SubscriptionStatus.EXPIRED,
+        },
+      });
+    }
 
     res.status(201).json({
       success: true,

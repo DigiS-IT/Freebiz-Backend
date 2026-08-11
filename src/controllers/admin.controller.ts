@@ -5,8 +5,139 @@ import { AppError } from '../utils/helpers';
 import { UserRole, SubscriptionStatus } from '@prisma/client';
 
 // ============================================
-// ADMIN DASHBOARD
+// ADMIN DASHBOARD & DEMOGRAPHICS HELPERS
 // ============================================
+
+const KNOWN_STATE_CITY_MAP: Record<string, string[]> = {
+  'Tamil Nadu': ['Chennai', 'Palavakkam, Chennai', 'Maduravoyal, Chennai', 'Coimbatore', 'Madurai', 'Salem', 'Trichy', 'Tirunelveli', 'Erode', 'Vellore'],
+  'Karnataka': ['Bangalore', 'Bengaluru', 'Mysore', 'Mangalore', 'Hubli'],
+  'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane', 'Nashik'],
+  'Telangana': ['Hyderabad', 'Warangal'],
+  'Delhi': ['Delhi', 'New Delhi', 'Noida', 'Gurgaon'],
+  'Kerala': ['Kochi', 'Thiruvananthapuram', 'Calicut'],
+};
+
+async function getDemographicsHelper(selectedState?: string, selectedCitiesStr?: string) {
+  let selectedCities: string[] = [];
+  if (selectedCitiesStr && selectedCitiesStr !== 'ALL' && selectedCitiesStr.trim() !== '') {
+    selectedCities = selectedCitiesStr.split(',').map((c) => c.trim()).filter(Boolean);
+  }
+
+  // 1. Build list of states & stateCityMap from CustomerProfile DB + Known Mappings
+  const allProfiles = await prisma.customerProfile.findMany({
+    select: { city: true, state: true, address: true },
+  });
+
+  const stateCityMap: Record<string, Set<string>> = {};
+
+  // Seed known state map
+  Object.entries(KNOWN_STATE_CITY_MAP).forEach(([st, cities]) => {
+    stateCityMap[st] = new Set(cities);
+  });
+
+  // Populate from DB records
+  allProfiles.forEach((p) => {
+    let st = p.state;
+    const city = p.city;
+    if (!st && city) {
+      for (const [knownState, knownCities] of Object.entries(KNOWN_STATE_CITY_MAP)) {
+        if (knownCities.some((kc) => city.toLowerCase().includes(kc.toLowerCase()) || kc.toLowerCase().includes(city.toLowerCase()))) {
+          st = knownState;
+          break;
+        }
+      }
+    }
+    if (!st) st = 'Tamil Nadu';
+    if (!stateCityMap[st]) stateCityMap[st] = new Set();
+    if (city) stateCityMap[st].add(city);
+  });
+
+  const formattedStateCityMap: Record<string, string[]> = {};
+  Object.keys(stateCityMap).sort().forEach((st) => {
+    formattedStateCityMap[st] = Array.from(stateCityMap[st]).sort();
+  });
+  const statesList = Object.keys(formattedStateCityMap);
+
+  // 2. Build Prisma filter condition
+  const where: any = {};
+
+  if (selectedCities.length > 0) {
+    where.city = { in: selectedCities };
+  } else if (selectedState && selectedState !== 'ALL') {
+    const citiesForState = formattedStateCityMap[selectedState] || [];
+    where.OR = [
+      { state: selectedState },
+      { city: { in: citiesForState } },
+    ];
+  }
+
+  // 3. Query gender counts
+  const males = await prisma.customerProfile.count({ where: { ...where, gender: 'Male' } });
+  const females = await prisma.customerProfile.count({ where: { ...where, gender: 'Female' } });
+  const others = await prisma.customerProfile.count({ where: { ...where, gender: 'Other' } });
+  const totalWithGender = males + females + others;
+  const gender = [
+    { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 0, count: males, color: 'bg-teal-500' },
+    { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 0, count: females, color: 'bg-rose-500' },
+    { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 0, count: others, color: 'bg-amber-500' },
+  ];
+
+  // 4. Query age groups counts
+  const age18_25 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 18, lte: 25 } } });
+  const age26_35 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 26, lte: 35 } } });
+  const age36_45 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 36, lte: 45 } } });
+  const age46Plus = await prisma.customerProfile.count({ where: { ...where, age: { gte: 46 } } });
+  const totalWithAge = age18_25 + age26_35 + age36_45 + age46Plus;
+  const ageGroups = [
+    { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 0, count: age18_25 },
+    { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 0, count: age26_35 },
+    { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 0, count: age36_45 },
+    { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 0, count: age46Plus },
+  ];
+
+  // 5. Query top cities
+  const cityGroups = await prisma.customerProfile.groupBy({
+    by: ['city'],
+    where: { ...where, city: { not: null } },
+    _count: { id: true },
+    orderBy: { _count: { id: 'desc' } },
+    take: 10,
+  });
+
+  const cities = cityGroups
+    .filter((cg) => cg.city)
+    .map((cg) => ({
+      name: cg.city as string,
+      count: cg._count.id,
+    }));
+
+  const totalFilteredCustomers = await prisma.customerProfile.count({ where });
+
+  return {
+    states: statesList,
+    stateCityMap: formattedStateCityMap,
+    demographics: {
+      gender,
+      ageGroups,
+      cities,
+      totalCustomers: totalFilteredCustomers,
+      selectedState: selectedState || 'ALL',
+      selectedCities,
+    },
+  };
+}
+
+export const getDemographics = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const stateFilter = (req.query.state as string) || 'ALL';
+    const citiesFilter = req.query.cities as string;
+    const result = await getDemographicsHelper(stateFilter, citiesFilter);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getDashboard = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // 1. Platform-wide counts
@@ -116,45 +247,13 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
       { name: 'Other Services', count: otherCount, pct: Math.round((otherCount / totalSvcCount) * 100), color: '#F59E0B' },
     ];
 
-    // 5. Customer Demographics (Gender, Age Groups, City Distribution from Database)
-    const males = await prisma.customerProfile.count({ where: { gender: 'Male' } });
-    const females = await prisma.customerProfile.count({ where: { gender: 'Female' } });
-    const others = await prisma.customerProfile.count({ where: { gender: 'Other' } });
-    const totalWithGender = males + females + others;
-    const gender = [
-      { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 0, color: 'bg-teal-500' },
-      { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 0, color: 'bg-rose-500' },
-      { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 0, color: 'bg-amber-500' },
-    ];
-
-    const age18_25 = await prisma.customerProfile.count({ where: { age: { gte: 18, lte: 25 } } });
-    const age26_35 = await prisma.customerProfile.count({ where: { age: { gte: 26, lte: 35 } } });
-    const age36_45 = await prisma.customerProfile.count({ where: { age: { gte: 36, lte: 45 } } });
-    const age46Plus = await prisma.customerProfile.count({ where: { age: { gte: 46 } } });
-    const totalWithAge = age18_25 + age26_35 + age36_45 + age46Plus;
-    const ageGroups = [
-      { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 0 },
-      { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 0 },
-      { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 0 },
-      { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 0 },
-    ];
-
-    // City Regional Distribution directly from Customer profiles in Database
-    const cityGroups = await prisma.customerProfile.groupBy({
-      by: ['city'],
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
-      take: 7,
-    });
-
-    const cities = cityGroups
-      .filter((cg) => cg.city)
-      .map((cg) => ({
-        name: cg.city as string,
-        count: cg._count.id,
-      }));
-
-    const demographics = { gender, ageGroups, cities };
+    // 5. Customer Demographics (Gender, Age Groups, City Distribution from Database with State/City filtering)
+    const stateFilter = (req.query.state as string) || 'ALL';
+    const citiesFilter = req.query.cities as string;
+    const demoResult = await getDemographicsHelper(stateFilter, citiesFilter);
+    const demographics = demoResult.demographics;
+    const states = demoResult.states;
+    const stateCityMap = demoResult.stateCityMap;
 
     // 6. Booking Conversion Funnel
     const totalSlotsCount = await prisma.serviceSlot.aggregate({
@@ -325,6 +424,8 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
       topSPs,
       serviceDistribution,
       demographics,
+      states,
+      stateCityMap,
       conversionFunnel,
       revenueGrowth,
       topServices: sortedTopServices,

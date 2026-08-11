@@ -22,4 +22,8 @@ router.get('/revenue', authenticate, superAdminOnly, adminController.getRevenue)
 router.post('/revenue', authenticate, superAdminOnly, adminController.createSubscription);
 router.put('/revenue', authenticate, superAdminOnly, adminController.updateSubscription);
 
+// Subscription Expiry Tracking & Automated Email Reminders
+router.get('/expiry', authenticate, superAdminOnly, adminController.getExpiryTracking);
+router.post('/expiry/send-reminders', authenticate, superAdminOnly, adminController.sendExpiryReminders);
+
 export default router;

@@ -7,6 +7,7 @@ const router = Router();
 
 // Dashboard analytics
 router.get('/dashboard', authenticate, superAdminOnly, adminController.getDashboard);
+router.get('/demographics', authenticate, superAdminOnly, adminController.getDemographics);
 
 // Providers management
 router.get('/providers', authenticate, superAdminOnly, adminController.getProviders);

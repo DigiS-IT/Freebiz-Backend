@@ -856,3 +856,167 @@ export const updateSubscription = async (req: Request, res: Response, next: Next
     next(error);
   }
 };
+
+// ============================================
+// SUBSCRIPTION EXPIRY TRACKING & AUTOMATED EMAILS
+// ============================================
+
+export const getExpiryTracking = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const providers = await prisma.serviceProviderProfile.findMany({
+      include: {
+        users: { select: { phone: true, email: true } },
+        services: { select: { city: true, contactNumber: true } },
+        subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const records: any[] = [];
+
+    providers.forEach((p) => {
+      const activeSub = p.subscriptions[0];
+      const spUser = p.users[0];
+      const service = p.services[0];
+      const email = p.businessEmail || spUser?.email || '';
+      const contact = p.primaryContact || service?.contactNumber || spUser?.phone || 'No Contact';
+      const city = p.city || service?.city || 'No City';
+
+      if (!activeSub) {
+        records.push({
+          id: `no-sub-${p.id}`,
+          spId: p.id,
+          spName: p.businessName,
+          spContact: contact,
+          spEmail: email,
+          spCity: city,
+          startDate: '—',
+          endDate: '—',
+          daysRemaining: -999,
+          status: 'NONE',
+          subId: null,
+        });
+      } else {
+        const endDate = new Date(activeSub.endDate);
+        const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const diffTime = endDay.getTime() - today.getTime();
+        const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        const isExpired = activeSub.status === SubscriptionStatus.EXPIRED || daysRemaining < 0;
+        const isExpiringSoon = !isExpired && daysRemaining <= 15;
+
+        if (isExpiringSoon || isExpired) {
+          records.push({
+            id: activeSub.id,
+            spId: p.id,
+            spName: p.businessName,
+            spContact: contact,
+            spEmail: email,
+            spCity: city,
+            startDate: activeSub.startDate.toISOString().split('T')[0],
+            endDate: activeSub.endDate.toISOString().split('T')[0],
+            daysRemaining,
+            status: isExpired ? 'EXPIRED' : 'EXPIRING_SOON',
+            subId: activeSub.id,
+          });
+        }
+      }
+    });
+
+    // SORTING: Lesser expiry days MUST come on top! (e.g. 0, 1, 2, 3 days... followed by expired items)
+    records.sort((a, b) => {
+      // If both are expiring soon (daysRemaining >= 0), sort ascending (lesser days first)
+      if (a.daysRemaining >= 0 && b.daysRemaining >= 0) {
+        return a.daysRemaining - b.daysRemaining;
+      }
+      // If one is expiring soon and one is expired/none, expiring soon comes first (urgent action!)
+      if (a.daysRemaining >= 0 && b.daysRemaining < 0) return -1;
+      if (a.daysRemaining < 0 && b.daysRemaining >= 0) return 1;
+      // If both are expired (daysRemaining < 0), sort most recently expired first
+      return b.daysRemaining - a.daysRemaining;
+    });
+
+    const expiringSoonCount = records.filter((r) => r.status === 'EXPIRING_SOON').length;
+    const expiredCount = records.filter((r) => r.status === 'EXPIRED' || r.status === 'NONE').length;
+
+    res.status(200).json({
+      success: true,
+      records,
+      expiringSoonCount,
+      expiredCount,
+      totalCount: records.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const sendExpiryReminders = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { spId, target } = req.body;
+
+    const ADMIN_EMAIL = 'admin@freebie.digisit.in';
+    const ADMIN_CONTACT = '+91 98846 33333';
+
+    // Fetch providers needing notification
+    const providers = await prisma.serviceProviderProfile.findMany({
+      where: spId ? { id: spId } : undefined,
+      include: {
+        users: { select: { email: true, phone: true } },
+        subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const dispatched: { spName: string; email: string; type: 'EXPIRING' | 'EXPIRED'; subject: string; message: string }[] = [];
+
+    providers.forEach((p) => {
+      const activeSub = p.subscriptions[0];
+      const email = p.businessEmail || p.users[0]?.email;
+      if (!email) return;
+
+      let isExpired = false;
+      let isExpiringSoon = false;
+
+      if (!activeSub) {
+        isExpired = true;
+      } else {
+        const endDate = new Date(activeSub.endDate);
+        const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const daysRemaining = Math.ceil((endDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysRemaining < 0 || activeSub.status === SubscriptionStatus.EXPIRED) {
+          isExpired = true;
+        } else if (daysRemaining <= 15) {
+          isExpiringSoon = true;
+        }
+      }
+
+      if (target === 'EXPIRING' && !isExpiringSoon) return;
+      if (target === 'EXPIRED' && !isExpired) return;
+      if (!isExpiringSoon && !isExpired) return;
+
+      if (isExpiringSoon) {
+        const subject = `FreeBie — Subscription Renewal Reminder`;
+        const message = `Your Subscription is going to expire soon. Please contact admin for renewal.\n\nAdmin Contact Details:\nEmail: ${ADMIN_EMAIL}\nPhone: ${ADMIN_CONTACT}`;
+        dispatched.push({ spName: p.businessName, email, type: 'EXPIRING', subject, message });
+      } else if (isExpired) {
+        const subject = `FreeBie — Subscription Expired Notice`;
+        const message = `Your service was expired. Please contact admin to renew your service.\n\nAdmin Contact Details:\nEmail: ${ADMIN_EMAIL}\nPhone: ${ADMIN_CONTACT}`;
+        dispatched.push({ spName: p.businessName, email, type: 'EXPIRED', subject, message });
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      sentCount: dispatched.length,
+      dispatched,
+      message: `Automated reminder emails successfully processed for ${dispatched.length} service provider(s)`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -606,6 +606,37 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       throw new AppError('spId is required', 400);
     }
 
+    // Pre-validate duplicate primary contact or business email across other users / providers
+    if (primaryContact && primaryContact.trim()) {
+      const existingUserPhone = await prisma.user.findFirst({
+        where: {
+          phone: primaryContact.trim(),
+          serviceProviderId: { not: spId },
+        },
+      });
+      if (existingUserPhone) {
+        throw new AppError(
+          `Primary Contact number '${primaryContact.trim()}' is already used by another Service Provider account. Please enter a unique contact number.`,
+          400
+        );
+      }
+    }
+
+    if (businessEmail && businessEmail.trim()) {
+      const existingUserEmail = await prisma.user.findFirst({
+        where: {
+          email: businessEmail.trim(),
+          serviceProviderId: { not: spId },
+        },
+      });
+      if (existingUserEmail) {
+        throw new AppError(
+          `Business email '${businessEmail.trim()}' is already registered with another Service Provider account. Please enter a unique email address.`,
+          400
+        );
+      }
+    }
+
     const updateData: any = {};
 
     if (isActive !== undefined) {

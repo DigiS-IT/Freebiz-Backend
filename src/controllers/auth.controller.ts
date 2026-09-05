@@ -369,7 +369,11 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
     }
 
     // Verify current password
-    const isValid = await bcrypt.compare(currentPassword, user.password);
+    const cleanCurrent = currentPassword.toString();
+    let isValid = await bcrypt.compare(cleanCurrent, user.password);
+    if (!isValid && cleanCurrent.trim() !== cleanCurrent) {
+      isValid = await bcrypt.compare(cleanCurrent.trim(), user.password);
+    }
     if (!isValid) {
       throw new AppError('Current password is incorrect', 400);
     }

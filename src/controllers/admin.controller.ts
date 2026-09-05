@@ -446,8 +446,45 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
     const { search } = req.query;
 
     const whereClause: any = {};
-    if (search) {
-      whereClause.businessName = { contains: search as string, mode: 'insensitive' };
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchStr = search.trim();
+      const cleanDigits = searchStr.replace(/\D/g, '');
+
+      const orConditions: any[] = [
+        { businessName: { contains: searchStr, mode: 'insensitive' } },
+        { primaryContact: { contains: searchStr, mode: 'insensitive' } },
+        { secondaryContact: { contains: searchStr, mode: 'insensitive' } },
+        { businessEmail: { contains: searchStr, mode: 'insensitive' } },
+        { city: { contains: searchStr, mode: 'insensitive' } },
+        { users: { some: { phone: { contains: searchStr } } } },
+        { users: { some: { email: { contains: searchStr, mode: 'insensitive' } } } },
+        { services: { some: { contactNumber: { contains: searchStr } } } },
+      ];
+
+      // If user typed formatted phone e.g. "+91 988...", "988-...", also search by pure digits
+      if (cleanDigits && cleanDigits !== searchStr) {
+        orConditions.push(
+          { primaryContact: { contains: cleanDigits, mode: 'insensitive' } },
+          { secondaryContact: { contains: cleanDigits, mode: 'insensitive' } },
+          { users: { some: { phone: { contains: cleanDigits } } } },
+          { services: { some: { contactNumber: { contains: cleanDigits } } } },
+        );
+      }
+
+      // If cleanDigits has country code prefix (e.g. 91988...), also search the 10-digit mobile number
+      if (cleanDigits && cleanDigits.length >= 10) {
+        const last10 = cleanDigits.slice(-10);
+        if (last10 !== searchStr && last10 !== cleanDigits) {
+          orConditions.push(
+            { primaryContact: { contains: last10, mode: 'insensitive' } },
+            { secondaryContact: { contains: last10, mode: 'insensitive' } },
+            { users: { some: { phone: { contains: last10 } } } },
+            { services: { some: { contactNumber: { contains: last10 } } } },
+          );
+        }
+      }
+
+      whereClause.OR = orConditions;
     }
 
     const providers = await prisma.serviceProviderProfile.findMany({

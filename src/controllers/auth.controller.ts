@@ -227,6 +227,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
           { id: cleanUserId },
           { phone: cleanUserId },
           { email: { equals: cleanUserId, mode: 'insensitive' } },
+          { email: { startsWith: `${cleanUserId}@`, mode: 'insensitive' } },
           ...(phoneSuffix ? [{ phone: { endsWith: phoneSuffix } }] : []),
           {
             serviceProvider: {

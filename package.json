@@ -11,7 +11,11 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "create-admin": "ts-node src/scripts/create-admin.ts",
+    "create-admin": "ts-node src/scripts/create-superadmin.ts",
+    "create-superadmin": "ts-node src/scripts/create-superadmin.ts",
+    "create-superadmin:prod": "node src/scripts/create-superadmin.js",
+    "remove-default-sp": "ts-node src/scripts/remove-default-sp.ts",
+    "remove-default-sp:prod": "node src/scripts/remove-default-sp.js",
     "prisma:reset": "prisma migrate reset",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""

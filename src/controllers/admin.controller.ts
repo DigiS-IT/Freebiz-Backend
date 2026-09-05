@@ -516,8 +516,16 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
       throw new AppError('Phone, password, business name, business email, address, city, latitude, and longitude are all required', 400);
     }
 
+    const cleanPhone = phone.toString().replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      throw new AppError('Phone number must be a valid 10-digit Indian mobile number', 400);
+    }
+
+    const cleanPrimary = primaryContact ? primaryContact.toString().replace(/\D/g, '').slice(-10) : cleanPhone;
+    const cleanSecondary = secondaryContact ? secondaryContact.toString().replace(/\D/g, '').slice(-10) : null;
+
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({ where: { phone } });
+    const existingUser = await prisma.user.findUnique({ where: { phone: cleanPhone } });
     if (existingUser) {
       throw new AppError('A user with this phone number already exists', 400);
     }
@@ -530,8 +538,8 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
       data: {
         businessName: businessName.trim(),
         businessEmail: businessEmail.trim(),
-        primaryContact: primaryContact?.trim() || null,
-        secondaryContact: secondaryContact?.trim() || null,
+        primaryContact: cleanPrimary || null,
+        secondaryContact: cleanSecondary || null,
         address: address.trim(),
         city: city.trim(),
         latitude: parseFloat(latitude.toString()),
@@ -542,7 +550,7 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
     // Create User record with role SP_SUPER_ADMIN linked to the profile
     const newUser = await prisma.user.create({
       data: {
-        phone,
+        phone: cleanPhone,
         email: businessEmail ? businessEmail.trim() : null,
         password: hashedPassword,
         role: UserRole.SP_SUPER_ADMIN,

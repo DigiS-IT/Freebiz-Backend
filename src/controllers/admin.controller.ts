@@ -698,7 +698,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
         },
         data: {
           password: hashedPassword,
-          mustChangePassword: false,
+          mustChangePassword: true,
         },
       });
       passwordUpdated = true;

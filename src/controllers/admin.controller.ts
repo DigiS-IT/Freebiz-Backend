@@ -5,8 +5,139 @@ import { AppError } from '../utils/helpers';
 import { UserRole, SubscriptionStatus } from '@prisma/client';
 
 // ============================================
-// ADMIN DASHBOARD
+// ADMIN DASHBOARD & DEMOGRAPHICS HELPERS
 // ============================================
+
+const KNOWN_STATE_CITY_MAP: Record<string, string[]> = {
+  'Tamil Nadu': ['Chennai', 'Palavakkam, Chennai', 'Maduravoyal, Chennai', 'Coimbatore', 'Madurai', 'Salem', 'Trichy', 'Tirunelveli', 'Erode', 'Vellore'],
+  'Karnataka': ['Bangalore', 'Bengaluru', 'Mysore', 'Mangalore', 'Hubli'],
+  'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane', 'Nashik'],
+  'Telangana': ['Hyderabad', 'Warangal'],
+  'Delhi': ['Delhi', 'New Delhi', 'Noida', 'Gurgaon'],
+  'Kerala': ['Kochi', 'Thiruvananthapuram', 'Calicut'],
+};
+
+async function getDemographicsHelper(selectedState?: string, selectedCitiesStr?: string) {
+  let selectedCities: string[] = [];
+  if (selectedCitiesStr && selectedCitiesStr !== 'ALL' && selectedCitiesStr.trim() !== '') {
+    selectedCities = selectedCitiesStr.split(',').map((c) => c.trim()).filter(Boolean);
+  }
+
+  // 1. Build list of states & stateCityMap from CustomerProfile DB + Known Mappings
+  const allProfiles = await prisma.customerProfile.findMany({
+    select: { city: true, state: true, address: true },
+  });
+
+  const stateCityMap: Record<string, Set<string>> = {};
+
+  // Seed known state map
+  Object.entries(KNOWN_STATE_CITY_MAP).forEach(([st, cities]) => {
+    stateCityMap[st] = new Set(cities);
+  });
+
+  // Populate from DB records
+  allProfiles.forEach((p) => {
+    let st = p.state;
+    const city = p.city;
+    if (!st && city) {
+      for (const [knownState, knownCities] of Object.entries(KNOWN_STATE_CITY_MAP)) {
+        if (knownCities.some((kc) => city.toLowerCase().includes(kc.toLowerCase()) || kc.toLowerCase().includes(city.toLowerCase()))) {
+          st = knownState;
+          break;
+        }
+      }
+    }
+    if (!st) st = 'Tamil Nadu';
+    if (!stateCityMap[st]) stateCityMap[st] = new Set();
+    if (city) stateCityMap[st].add(city);
+  });
+
+  const formattedStateCityMap: Record<string, string[]> = {};
+  Object.keys(stateCityMap).sort().forEach((st) => {
+    formattedStateCityMap[st] = Array.from(stateCityMap[st]).sort();
+  });
+  const statesList = Object.keys(formattedStateCityMap);
+
+  // 2. Build Prisma filter condition
+  const where: any = {};
+
+  if (selectedCities.length > 0) {
+    where.city = { in: selectedCities };
+  } else if (selectedState && selectedState !== 'ALL') {
+    const citiesForState = formattedStateCityMap[selectedState] || [];
+    where.OR = [
+      { state: selectedState },
+      { city: { in: citiesForState } },
+    ];
+  }
+
+  // 3. Query gender counts
+  const males = await prisma.customerProfile.count({ where: { ...where, gender: 'Male' } });
+  const females = await prisma.customerProfile.count({ where: { ...where, gender: 'Female' } });
+  const others = await prisma.customerProfile.count({ where: { ...where, gender: 'Other' } });
+  const totalWithGender = males + females + others;
+  const gender = [
+    { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 0, count: males, color: 'bg-teal-500' },
+    { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 0, count: females, color: 'bg-rose-500' },
+    { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 0, count: others, color: 'bg-amber-500' },
+  ];
+
+  // 4. Query age groups counts
+  const age18_25 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 18, lte: 25 } } });
+  const age26_35 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 26, lte: 35 } } });
+  const age36_45 = await prisma.customerProfile.count({ where: { ...where, age: { gte: 36, lte: 45 } } });
+  const age46Plus = await prisma.customerProfile.count({ where: { ...where, age: { gte: 46 } } });
+  const totalWithAge = age18_25 + age26_35 + age36_45 + age46Plus;
+  const ageGroups = [
+    { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 0, count: age18_25 },
+    { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 0, count: age26_35 },
+    { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 0, count: age36_45 },
+    { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 0, count: age46Plus },
+  ];
+
+  // 5. Query top cities
+  const cityGroups = await prisma.customerProfile.groupBy({
+    by: ['city'],
+    where: { ...where, city: { not: null } },
+    _count: { id: true },
+    orderBy: { _count: { id: 'desc' } },
+    take: 10,
+  });
+
+  const cities = cityGroups
+    .filter((cg) => cg.city)
+    .map((cg) => ({
+      name: cg.city as string,
+      count: cg._count.id,
+    }));
+
+  const totalFilteredCustomers = await prisma.customerProfile.count({ where });
+
+  return {
+    states: statesList,
+    stateCityMap: formattedStateCityMap,
+    demographics: {
+      gender,
+      ageGroups,
+      cities,
+      totalCustomers: totalFilteredCustomers,
+      selectedState: selectedState || 'ALL',
+      selectedCities,
+    },
+  };
+}
+
+export const getDemographics = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const stateFilter = (req.query.state as string) || 'ALL';
+    const citiesFilter = req.query.cities as string;
+    const result = await getDemographicsHelper(stateFilter, citiesFilter);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getDashboard = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // 1. Platform-wide counts
@@ -116,45 +247,13 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
       { name: 'Other Services', count: otherCount, pct: Math.round((otherCount / totalSvcCount) * 100), color: '#F59E0B' },
     ];
 
-    // 5. Customer Demographics (Gender, Age Groups, City Distribution from Database)
-    const males = await prisma.customerProfile.count({ where: { gender: 'Male' } });
-    const females = await prisma.customerProfile.count({ where: { gender: 'Female' } });
-    const others = await prisma.customerProfile.count({ where: { gender: 'Other' } });
-    const totalWithGender = males + females + others;
-    const gender = [
-      { label: 'Male', pct: totalWithGender > 0 ? Math.round((males / totalWithGender) * 100) : 0, color: 'bg-teal-500' },
-      { label: 'Female', pct: totalWithGender > 0 ? Math.round((females / totalWithGender) * 100) : 0, color: 'bg-rose-500' },
-      { label: 'Other', pct: totalWithGender > 0 ? Math.round((others / totalWithGender) * 100) : 0, color: 'bg-amber-500' },
-    ];
-
-    const age18_25 = await prisma.customerProfile.count({ where: { age: { gte: 18, lte: 25 } } });
-    const age26_35 = await prisma.customerProfile.count({ where: { age: { gte: 26, lte: 35 } } });
-    const age36_45 = await prisma.customerProfile.count({ where: { age: { gte: 36, lte: 45 } } });
-    const age46Plus = await prisma.customerProfile.count({ where: { age: { gte: 46 } } });
-    const totalWithAge = age18_25 + age26_35 + age36_45 + age46Plus;
-    const ageGroups = [
-      { label: '18-25', pct: totalWithAge > 0 ? Math.round((age18_25 / totalWithAge) * 100) : 0 },
-      { label: '26-35', pct: totalWithAge > 0 ? Math.round((age26_35 / totalWithAge) * 100) : 0 },
-      { label: '36-45', pct: totalWithAge > 0 ? Math.round((age36_45 / totalWithAge) * 100) : 0 },
-      { label: '46+', pct: totalWithAge > 0 ? Math.round((age46Plus / totalWithAge) * 100) : 0 },
-    ];
-
-    // City Regional Distribution directly from Customer profiles in Database
-    const cityGroups = await prisma.customerProfile.groupBy({
-      by: ['city'],
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
-      take: 7,
-    });
-
-    const cities = cityGroups
-      .filter((cg) => cg.city)
-      .map((cg) => ({
-        name: cg.city as string,
-        count: cg._count.id,
-      }));
-
-    const demographics = { gender, ageGroups, cities };
+    // 5. Customer Demographics (Gender, Age Groups, City Distribution from Database with State/City filtering)
+    const stateFilter = (req.query.state as string) || 'ALL';
+    const citiesFilter = req.query.cities as string;
+    const demoResult = await getDemographicsHelper(stateFilter, citiesFilter);
+    const demographics = demoResult.demographics;
+    const states = demoResult.states;
+    const stateCityMap = demoResult.stateCityMap;
 
     // 6. Booking Conversion Funnel
     const totalSlotsCount = await prisma.serviceSlot.aggregate({
@@ -325,6 +424,8 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
       topSPs,
       serviceDistribution,
       demographics,
+      states,
+      stateCityMap,
       conversionFunnel,
       revenueGrowth,
       topServices: sortedTopServices,
@@ -345,8 +446,45 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
     const { search } = req.query;
 
     const whereClause: any = {};
-    if (search) {
-      whereClause.businessName = { contains: search as string, mode: 'insensitive' };
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchStr = search.trim();
+      const cleanDigits = searchStr.replace(/\D/g, '');
+
+      const orConditions: any[] = [
+        { businessName: { contains: searchStr, mode: 'insensitive' } },
+        { primaryContact: { contains: searchStr, mode: 'insensitive' } },
+        { secondaryContact: { contains: searchStr, mode: 'insensitive' } },
+        { businessEmail: { contains: searchStr, mode: 'insensitive' } },
+        { city: { contains: searchStr, mode: 'insensitive' } },
+        { users: { some: { phone: { contains: searchStr } } } },
+        { users: { some: { email: { contains: searchStr, mode: 'insensitive' } } } },
+        { services: { some: { contactNumber: { contains: searchStr } } } },
+      ];
+
+      // If user typed formatted phone e.g. "+91 988...", "988-...", also search by pure digits
+      if (cleanDigits && cleanDigits !== searchStr) {
+        orConditions.push(
+          { primaryContact: { contains: cleanDigits, mode: 'insensitive' } },
+          { secondaryContact: { contains: cleanDigits, mode: 'insensitive' } },
+          { users: { some: { phone: { contains: cleanDigits } } } },
+          { services: { some: { contactNumber: { contains: cleanDigits } } } },
+        );
+      }
+
+      // If cleanDigits has country code prefix (e.g. 91988...), also search the 10-digit mobile number
+      if (cleanDigits && cleanDigits.length >= 10) {
+        const last10 = cleanDigits.slice(-10);
+        if (last10 !== searchStr && last10 !== cleanDigits) {
+          orConditions.push(
+            { primaryContact: { contains: last10, mode: 'insensitive' } },
+            { secondaryContact: { contains: last10, mode: 'insensitive' } },
+            { users: { some: { phone: { contains: last10 } } } },
+            { services: { some: { contactNumber: { contains: last10 } } } },
+          );
+        }
+      }
+
+      whereClause.OR = orConditions;
     }
 
     const providers = await prisma.serviceProviderProfile.findMany({
@@ -363,10 +501,16 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
       const spUser = p.users[0];
       const service = p.services[0];
       const activeSub = p.subscriptions[0];
+      let daysRemaining = 0;
+      if (activeSub?.endDate) {
+        const diffTime = new Date(activeSub.endDate).getTime() - new Date().getTime();
+        daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      }
 
       return {
         id: p.id,
         name: p.businessName,
+        profilePic: p.profilePic || null,
         businessEmail: p.businessEmail || spUser?.email || '',
         primaryContact: p.primaryContact || '',
         secondaryContact: p.secondaryContact || '',
@@ -385,9 +529,11 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
         })),
         subscription: activeSub
           ? {
+              id: activeSub.id,
               startDate: activeSub.startDate.toISOString().split('T')[0],
               endDate: activeSub.endDate.toISOString().split('T')[0],
               isActive: activeSub.status === SubscriptionStatus.ACTIVE && activeSub.endDate >= new Date(),
+              daysRemaining,
             }
           : null,
       };
@@ -402,14 +548,22 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
 // Create a new SP Super Admin User (Super Service Provider)
 export const createProvider = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone, password, businessName, businessEmail, primaryContact, secondaryContact, address, city, latitude, longitude } = req.body;
+    const { phone, password, businessName, businessEmail, profilePic, primaryContact, secondaryContact, address, city, latitude, longitude, startDate, endDate } = req.body;
 
     if (!phone || !password || !businessName?.trim() || !businessEmail?.trim() || !address?.trim() || !city?.trim() || latitude === undefined || longitude === undefined) {
       throw new AppError('Phone, password, business name, business email, address, city, latitude, and longitude are all required', 400);
     }
 
+    const cleanPhone = phone.toString().replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      throw new AppError('Phone number must be a valid 10-digit Indian mobile number', 400);
+    }
+
+    const cleanPrimary = primaryContact ? primaryContact.toString().replace(/\D/g, '').slice(-10) : cleanPhone;
+    const cleanSecondary = secondaryContact ? secondaryContact.toString().replace(/\D/g, '').slice(-10) : null;
+
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({ where: { phone } });
+    const existingUser = await prisma.user.findUnique({ where: { phone: cleanPhone } });
     if (existingUser) {
       throw new AppError('A user with this phone number already exists', 400);
     }
@@ -422,8 +576,9 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
       data: {
         businessName: businessName.trim(),
         businessEmail: businessEmail.trim(),
-        primaryContact: primaryContact?.trim() || null,
-        secondaryContact: secondaryContact?.trim() || null,
+        profilePic: profilePic && typeof profilePic === 'string' ? profilePic.trim() : null,
+        primaryContact: cleanPrimary || null,
+        secondaryContact: cleanSecondary || null,
         address: address.trim(),
         city: city.trim(),
         latitude: parseFloat(latitude.toString()),
@@ -434,7 +589,7 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
     // Create User record with role SP_SUPER_ADMIN linked to the profile
     const newUser = await prisma.user.create({
       data: {
-        phone,
+        phone: cleanPhone,
         email: businessEmail ? businessEmail.trim() : null,
         password: hashedPassword,
         role: UserRole.SP_SUPER_ADMIN,
@@ -443,6 +598,23 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
         serviceProviderId: profile.id,
       },
     });
+
+    // Create initial subscription if startDate and endDate are provided
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      await prisma.subscription.create({
+        data: {
+          serviceProviderId: profile.id,
+          startDate: start,
+          endDate: end,
+          status: end >= today ? SubscriptionStatus.ACTIVE : SubscriptionStatus.EXPIRED,
+        },
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -468,6 +640,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       isActive,
       businessName,
       businessEmail,
+      profilePic,
       primaryContact,
       secondaryContact,
       address,
@@ -490,6 +663,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
 
     if (businessName !== undefined && businessName !== null) updateData.businessName = businessName.trim();
     if (businessEmail !== undefined && businessEmail !== null) updateData.businessEmail = businessEmail.trim();
+    if (profilePic !== undefined) updateData.profilePic = profilePic && typeof profilePic === 'string' ? profilePic.trim() : null;
     if (primaryContact !== undefined && primaryContact !== null) updateData.primaryContact = primaryContact.trim();
     if (secondaryContact !== undefined && secondaryContact !== null) updateData.secondaryContact = secondaryContact.trim();
     if (address !== undefined && address !== null) updateData.address = address.trim();
@@ -727,6 +901,170 @@ export const updateSubscription = async (req: Request, res: Response, next: Next
     });
 
     res.status(200).json({ success: true, subscription: updated });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================
+// SUBSCRIPTION EXPIRY TRACKING & AUTOMATED EMAILS
+// ============================================
+
+export const getExpiryTracking = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const providers = await prisma.serviceProviderProfile.findMany({
+      include: {
+        users: { select: { phone: true, email: true } },
+        services: { select: { city: true, contactNumber: true } },
+        subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const records: any[] = [];
+
+    providers.forEach((p) => {
+      const activeSub = p.subscriptions[0];
+      const spUser = p.users[0];
+      const service = p.services[0];
+      const email = p.businessEmail || spUser?.email || '';
+      const contact = p.primaryContact || service?.contactNumber || spUser?.phone || 'No Contact';
+      const city = p.city || service?.city || 'No City';
+
+      if (!activeSub) {
+        records.push({
+          id: `no-sub-${p.id}`,
+          spId: p.id,
+          spName: p.businessName,
+          spContact: contact,
+          spEmail: email,
+          spCity: city,
+          startDate: '—',
+          endDate: '—',
+          daysRemaining: -999,
+          status: 'NONE',
+          subId: null,
+        });
+      } else {
+        const endDate = new Date(activeSub.endDate);
+        const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const diffTime = endDay.getTime() - today.getTime();
+        const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        const isExpired = activeSub.status === SubscriptionStatus.EXPIRED || daysRemaining < 0;
+        const isExpiringSoon = !isExpired && daysRemaining <= 15;
+
+        if (isExpiringSoon || isExpired) {
+          records.push({
+            id: activeSub.id,
+            spId: p.id,
+            spName: p.businessName,
+            spContact: contact,
+            spEmail: email,
+            spCity: city,
+            startDate: activeSub.startDate.toISOString().split('T')[0],
+            endDate: activeSub.endDate.toISOString().split('T')[0],
+            daysRemaining,
+            status: isExpired ? 'EXPIRED' : 'EXPIRING_SOON',
+            subId: activeSub.id,
+          });
+        }
+      }
+    });
+
+    // SORTING: Lesser expiry days MUST come on top! (e.g. 0, 1, 2, 3 days... followed by expired items)
+    records.sort((a, b) => {
+      // If both are expiring soon (daysRemaining >= 0), sort ascending (lesser days first)
+      if (a.daysRemaining >= 0 && b.daysRemaining >= 0) {
+        return a.daysRemaining - b.daysRemaining;
+      }
+      // If one is expiring soon and one is expired/none, expiring soon comes first (urgent action!)
+      if (a.daysRemaining >= 0 && b.daysRemaining < 0) return -1;
+      if (a.daysRemaining < 0 && b.daysRemaining >= 0) return 1;
+      // If both are expired (daysRemaining < 0), sort most recently expired first
+      return b.daysRemaining - a.daysRemaining;
+    });
+
+    const expiringSoonCount = records.filter((r) => r.status === 'EXPIRING_SOON').length;
+    const expiredCount = records.filter((r) => r.status === 'EXPIRED' || r.status === 'NONE').length;
+
+    res.status(200).json({
+      success: true,
+      records,
+      expiringSoonCount,
+      expiredCount,
+      totalCount: records.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const sendExpiryReminders = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { spId, target } = req.body;
+
+    const ADMIN_EMAIL = 'admin@freebie.digisit.in';
+    const ADMIN_CONTACT = '+91 98846 33333';
+
+    // Fetch providers needing notification
+    const providers = await prisma.serviceProviderProfile.findMany({
+      where: spId ? { id: spId } : undefined,
+      include: {
+        users: { select: { email: true, phone: true } },
+        subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const dispatched: { spName: string; email: string; type: 'EXPIRING' | 'EXPIRED'; subject: string; message: string }[] = [];
+
+    providers.forEach((p) => {
+      const activeSub = p.subscriptions[0];
+      const email = p.businessEmail || p.users[0]?.email;
+      if (!email) return;
+
+      let isExpired = false;
+      let isExpiringSoon = false;
+
+      if (!activeSub) {
+        isExpired = true;
+      } else {
+        const endDate = new Date(activeSub.endDate);
+        const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const daysRemaining = Math.ceil((endDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysRemaining < 0 || activeSub.status === SubscriptionStatus.EXPIRED) {
+          isExpired = true;
+        } else if (daysRemaining <= 15) {
+          isExpiringSoon = true;
+        }
+      }
+
+      if (target === 'EXPIRING' && !isExpiringSoon) return;
+      if (target === 'EXPIRED' && !isExpired) return;
+      if (!isExpiringSoon && !isExpired) return;
+
+      if (isExpiringSoon) {
+        const subject = `FreeBie — Subscription Renewal Reminder`;
+        const message = `Your Subscription is going to expire soon. Please contact admin for renewal.\n\nAdmin Contact Details:\nEmail: ${ADMIN_EMAIL}\nPhone: ${ADMIN_CONTACT}`;
+        dispatched.push({ spName: p.businessName, email, type: 'EXPIRING', subject, message });
+      } else if (isExpired) {
+        const subject = `FreeBie — Subscription Expired Notice`;
+        const message = `Your service was expired. Please contact admin to renew your service.\n\nAdmin Contact Details:\nEmail: ${ADMIN_EMAIL}\nPhone: ${ADMIN_CONTACT}`;
+        dispatched.push({ spName: p.businessName, email, type: 'EXPIRED', subject, message });
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      sentCount: dispatched.length,
+      dispatched,
+      message: `Automated reminder emails successfully processed for ${dispatched.length} service provider(s)`,
+    });
   } catch (error) {
     next(error);
   }

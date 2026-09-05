@@ -20,6 +20,8 @@ router.post('/', authenticate, upload.single('file'), async (req: AuthRequest, r
 
     if (assetType === 'user-profile') {
       folder = `user-profiles/${userId}`;
+    } else if (assetType === 'sp-profile' || assetType === 'service-provider-logo') {
+      folder = `service-providers/${spId}/profile`;
     } else if (assetType === 'free-services') {
       folder = `service-providers/${spId}/free-services`;
     } else if (assetType === 'discount-services') {

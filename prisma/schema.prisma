@@ -128,6 +128,7 @@ model CustomerProfile {
   profilePicture  String?
   address         String?
   city            String?
+  state           String?
   latitude        Float?
   longitude       Float?
   isProfileComplete Boolean @default(false)
@@ -140,6 +141,7 @@ model CustomerProfile {
   ratings   Rating[]
 
   @@index([city])
+  @@index([state])
   @@index([latitude, longitude])
 }
 
@@ -165,6 +167,7 @@ model ServiceProviderProfile {
   id           String    @id @default(uuid())
   businessName String
   businessEmail String?
+  profilePic   String?
   primaryContact String?
   secondaryContact String?
   address      String?   @db.Text

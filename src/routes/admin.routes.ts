@@ -7,6 +7,7 @@ const router = Router();
 
 // Dashboard analytics
 router.get('/dashboard', authenticate, superAdminOnly, adminController.getDashboard);
+router.get('/demographics', authenticate, superAdminOnly, adminController.getDemographics);
 
 // Providers management
 router.get('/providers', authenticate, superAdminOnly, adminController.getProviders);
@@ -20,5 +21,9 @@ router.get('/customers', authenticate, superAdminOnly, adminController.getCustom
 router.get('/revenue', authenticate, superAdminOnly, adminController.getRevenue);
 router.post('/revenue', authenticate, superAdminOnly, adminController.createSubscription);
 router.put('/revenue', authenticate, superAdminOnly, adminController.updateSubscription);
+
+// Subscription Expiry Tracking & Automated Email Reminders
+router.get('/expiry', authenticate, superAdminOnly, adminController.getExpiryTracking);
+router.post('/expiry/send-reminders', authenticate, superAdminOnly, adminController.sendExpiryReminders);
 
 export default router;

@@ -289,6 +289,7 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       data: {
         id: provider.id,
         businessName: provider.businessName,
+        profilePic: provider.profilePic || null,
         isDisabled: provider.isDisabled,
         registeredOn: provider.createdAt.toISOString(),
         serviceCount,

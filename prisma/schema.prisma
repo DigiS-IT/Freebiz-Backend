@@ -167,6 +167,7 @@ model ServiceProviderProfile {
   id           String    @id @default(uuid())
   businessName String
   businessEmail String?
+  profilePic   String?
   primaryContact String?
   secondaryContact String?
   address      String?   @db.Text

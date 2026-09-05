@@ -473,6 +473,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
       return {
         id: p.id,
         name: p.businessName,
+        profilePic: p.profilePic || null,
         businessEmail: p.businessEmail || spUser?.email || '',
         primaryContact: p.primaryContact || '',
         secondaryContact: p.secondaryContact || '',
@@ -510,7 +511,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
 // Create a new SP Super Admin User (Super Service Provider)
 export const createProvider = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone, password, businessName, businessEmail, primaryContact, secondaryContact, address, city, latitude, longitude, startDate, endDate } = req.body;
+    const { phone, password, businessName, businessEmail, profilePic, primaryContact, secondaryContact, address, city, latitude, longitude, startDate, endDate } = req.body;
 
     if (!phone || !password || !businessName?.trim() || !businessEmail?.trim() || !address?.trim() || !city?.trim() || latitude === undefined || longitude === undefined) {
       throw new AppError('Phone, password, business name, business email, address, city, latitude, and longitude are all required', 400);
@@ -538,6 +539,7 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
       data: {
         businessName: businessName.trim(),
         businessEmail: businessEmail.trim(),
+        profilePic: profilePic && typeof profilePic === 'string' ? profilePic.trim() : null,
         primaryContact: cleanPrimary || null,
         secondaryContact: cleanSecondary || null,
         address: address.trim(),
@@ -601,6 +603,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       isActive,
       businessName,
       businessEmail,
+      profilePic,
       primaryContact,
       secondaryContact,
       address,
@@ -623,6 +626,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
 
     if (businessName !== undefined && businessName !== null) updateData.businessName = businessName.trim();
     if (businessEmail !== undefined && businessEmail !== null) updateData.businessEmail = businessEmail.trim();
+    if (profilePic !== undefined) updateData.profilePic = profilePic && typeof profilePic === 'string' ? profilePic.trim() : null;
     if (primaryContact !== undefined && primaryContact !== null) updateData.primaryContact = primaryContact.trim();
     if (secondaryContact !== undefined && secondaryContact !== null) updateData.secondaryContact = secondaryContact.trim();
     if (address !== undefined && address !== null) updateData.address = address.trim();

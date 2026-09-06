@@ -4,7 +4,7 @@ import * as serviceController from '../controllers/service.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { spOnly, spSuperAdminOnly } from '../middlewares/role.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 // Statistics & Bookings
 router.get('/dashboard', authenticate, spOnly, spController.getSpDashboard);

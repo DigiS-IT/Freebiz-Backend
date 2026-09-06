@@ -684,7 +684,11 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('You must register a business profile first before adding staff accounts', 400);
     }
 
-    const { phone, password, email } = req.body;
+    const { name, phone, password, email } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new AppError('Staff name is mandatory', 400);
+    }
 
     if (!phone || !password) {
       throw new AppError('Phone and password are required', 400);
@@ -710,6 +714,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
     // Create standard Service Provider (MOBILE_SP) user
     const newUser = await prisma.user.create({
       data: {
+        name: name.trim(),
         phone,
         email: email?.trim() || null,
         password: hashedPassword,
@@ -726,6 +731,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
       message: 'Service provider user created successfully',
       data: {
         id: newUser.id,
+        name: newUser.name,
         phone: newUser.phone,
         email: newUser.email,
         role: newUser.role,
@@ -751,9 +757,11 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
       where: {
         serviceProviderId: spId,
         role: UserRole.MOBILE_SP,
+        isDeleted: false,
       },
       select: {
         id: true,
+        name: true,
         phone: true,
         email: true,
         role: true,
@@ -770,6 +778,119 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
     res.status(200).json({
       success: true,
       data: users,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update standard Service Provider user (staff) details: name, status (isActive), and optional password
+export const updateSpUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const { userId } = req.params;
+    const { name, isActive, password } = req.body;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    // Verify that this user belongs to the same service provider and has MOBILE_SP role and is not deleted
+    const staffUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+        isDeleted: false,
+      },
+    });
+
+    if (!staffUser) {
+      throw new AppError('Staff user not found or does not belong to your business', 404);
+    }
+
+    const updateData: any = {};
+
+    if (name !== undefined) {
+      if (!name.trim()) {
+        throw new AppError('Staff name cannot be empty', 400);
+      }
+      updateData.name = name.trim();
+    }
+
+    if (isActive !== undefined) {
+      updateData.isActive = Boolean(isActive);
+    }
+
+    if (password && password.trim()) {
+      if (password.trim().length < 6) {
+        throw new AppError('Password must be at least 6 characters long', 400);
+      }
+      updateData.password = await bcrypt.hash(password.trim(), 12);
+      updateData.mustChangePassword = true;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        role: true,
+        isActive: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff user updated successfully',
+      data: updatedUser,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Soft delete a standard Service Provider user (staff)
+export const deleteSpUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const { userId } = req.params;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    const staffUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+        isDeleted: false,
+      },
+    });
+
+    if (!staffUser) {
+      throw new AppError('Staff user not found or does not belong to your business', 404);
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: false,
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff user deleted successfully',
     });
   } catch (error) {
     next(error);
@@ -797,6 +918,7 @@ export const updateSpUserPassword = async (req: AuthRequest, res: Response, next
         id: userId,
         serviceProviderId: spId,
         role: UserRole.MOBILE_SP,
+        isDeleted: false,
       },
     });
 

@@ -204,6 +204,8 @@ model Service {
   startDate           DateTime?   @db.Date
   endDate             DateTime?   @db.Date
   isActive            Boolean     @default(true)
+  isDeleted           Boolean     @default(false)
+  deletedAt           DateTime?
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
@@ -225,6 +227,7 @@ model Service {
 
   @@index([city])
   @@index([isActive])
+  @@index([isDeleted])
   @@index([serviceType])
   @@index([latitude, longitude])
   @@index([parentId])
@@ -254,6 +257,8 @@ model ServiceSlot {
   specialInstructions  String?  @db.Text
   termsAndConditions   String?  @db.Text
   isActive             Boolean  @default(true)
+  isDeleted            Boolean  @default(false)
+  deletedAt            DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -264,6 +269,7 @@ model ServiceSlot {
   @@index([serviceId])
   @@index([startDate, endDate])
   @@index([isActive])
+  @@index([isDeleted])
 }
 
 // ============================================

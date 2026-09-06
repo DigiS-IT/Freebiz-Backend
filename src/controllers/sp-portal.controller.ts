@@ -41,9 +41,9 @@ export const getSpDashboard = async (req: AuthRequest, res: Response, next: Next
 
     // 1. Fetch services & booking metrics for this SP from DB
     const services = await prisma.service.findMany({
-      where: { serviceProviderId: spId },
+      where: { serviceProviderId: spId, isDeleted: false },
       include: {
-        slots: true,
+        slots: { where: { isDeleted: false } },
         bookings: true,
       },
     });
@@ -320,8 +320,9 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       where: { id: spId },
       include: {
         services: {
+          where: { isDeleted: false },
           include: {
-            slots: true,
+            slots: { where: { isDeleted: false } },
             bookings: {
               include: {
                 rating: true,
@@ -414,9 +415,9 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
     }
 
     const services = await prisma.service.findMany({
-      where: { serviceProviderId: spId },
+      where: { serviceProviderId: spId, isDeleted: false },
       include: { 
-        slots: { orderBy: { createdAt: 'desc' } },
+        slots: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
         media: { orderBy: { order: 'asc' } },
       },
     });

@@ -233,6 +233,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 4. Service Distribution: Free Services, Discounted Services, Other Services
     const allServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       include: { bookings: true },
     });
 
@@ -257,6 +258,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 6. Booking Conversion Funnel
     const totalSlotsCount = await prisma.serviceSlot.aggregate({
+      where: { isDeleted: false },
       _sum: {
         totalCount: true,
       },
@@ -299,6 +301,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 8. Detailed Top Booking Services directly from Service & Booking tables in Database
     const topServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       include: {
         bookings: true,
         serviceProvider: true,
@@ -377,6 +380,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
     });
 
     const recentServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       take: 4,
       orderBy: { createdAt: 'desc' },
       include: { serviceProvider: { select: { businessName: true } } },
@@ -491,7 +495,10 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
       where: whereClause,
       include: {
         users: true,
-        services: { include: { slots: true } },
+        services: {
+          where: { isDeleted: false },
+          include: { slots: { where: { isDeleted: false } } },
+        },
         subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
       orderBy: { createdAt: 'desc' },
@@ -523,7 +530,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
         registeredOn: p.createdAt.toISOString(),
         services: p.services.map((s) => ({
           id: s.id,
-          name: s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service',
+          name: s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
           type: s.serviceType.toLowerCase(),
           discountPercentage: s.discountPercentage,
         })),
@@ -926,6 +933,7 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
           },
         },
         services: {
+          where: { isDeleted: false },
           select: {
             id: true,
             serviceDetail: true,

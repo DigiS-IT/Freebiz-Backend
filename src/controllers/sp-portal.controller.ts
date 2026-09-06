@@ -421,40 +421,54 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
       },
     });
 
-    const formatted = services.map((s) => ({
-      id: s.id,
-      name: s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service',
-      type: s.serviceType.toLowerCase(),
-      description: s.serviceDetail,
-      actualPrice: s.actualPrice,
-      discountedPrice: s.discountedPrice,
-      discountPercentage: s.discountPercentage,
-      contactNumber: s.contactNumber,
-      address: s.address,
-      city: s.city,
-      latitude: s.latitude,
-      longitude: s.longitude,
-      specialInstructions: s.specialInstructions,
-      termsAndConditions: s.termsAndConditions,
-      parentId: s.parentId,
-      media: s.media.map(m => ({
-        id: m.id,
-        mediaType: m.mediaType,
-        mediaUrl: m.mediaUrl,
-        thumbnailUrl: m.thumbnailUrl,
-        order: m.order,
-      })),
-      slots: s.slots.map(slot => ({
+    const allSlots: any[] = [];
+    const formatted = services.map((s) => {
+      const serviceName = s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service');
+      const serviceType = s.serviceType.toLowerCase();
+      const mappedSlots = s.slots.map(slot => ({
         id: slot.id,
         serviceId: slot.serviceId,
+        serviceName,
+        serviceType,
         fromDate: slot.startDate.toISOString().split('T')[0],
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
-      })),
-    }));
+        isActive: slot.isActive,
+      }));
+      allSlots.push(...mappedSlots);
 
-    res.status(200).json({ success: true, services: formatted });
+      return {
+        id: s.id,
+        name: serviceName,
+        serviceName,
+        serviceDetail: s.serviceDetail,
+        type: serviceType,
+        serviceType,
+        description: s.serviceDetail,
+        actualPrice: s.actualPrice,
+        discountedPrice: s.discountedPrice,
+        discountPercentage: s.discountPercentage,
+        contactNumber: s.contactNumber,
+        address: s.address,
+        city: s.city,
+        latitude: s.latitude,
+        longitude: s.longitude,
+        specialInstructions: s.specialInstructions,
+        termsAndConditions: s.termsAndConditions,
+        parentId: s.parentId,
+        media: s.media.map(m => ({
+          id: m.id,
+          mediaType: m.mediaType,
+          mediaUrl: m.mediaUrl,
+          thumbnailUrl: m.thumbnailUrl,
+          order: m.order,
+        })),
+        slots: mappedSlots,
+      };
+    });
+
+    res.status(200).json({ success: true, services: formatted, slots: allSlots });
   } catch (error) {
     next(error);
   }

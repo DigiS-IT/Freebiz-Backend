@@ -5,7 +5,7 @@ import { authenticate } from '../middlewares/auth.middleware';
 import { spOnly, spOrSuperAdmin } from '../middlewares/role.middleware';
 import { getServicesSchema, createServiceSchema, updateServiceSchema } from '../validators/service.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/', validateRequest(getServicesSchema), serviceController.getServices);
 router.get('/home/categories', validateRequest(getServicesSchema), serviceController.getHomeCategories);

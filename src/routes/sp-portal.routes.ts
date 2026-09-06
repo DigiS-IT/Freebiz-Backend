@@ -16,6 +16,8 @@ router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpPro
 router.get('/profile', authenticate, spOnly, spController.getSpProfile);
 router.post('/staff', authenticate, spSuperAdminOnly, spController.createSpUser);
 router.get('/staff', authenticate, spSuperAdminOnly, spController.getSpUsers);
+router.put('/staff/:userId', authenticate, spSuperAdminOnly, spController.updateSpUser);
+router.delete('/staff/:userId', authenticate, spSuperAdminOnly, spController.deleteSpUser);
 router.put('/staff/:userId/password', authenticate, spSuperAdminOnly, spController.updateSpUserPassword);
 
 // Slot management

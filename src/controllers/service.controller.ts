@@ -458,6 +458,11 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       throw new AppError('Terms and conditions are mandatory', 400);
     }
 
+    const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+    if (photos.length < 3) {
+      throw new AppError('At least 3 photos are mandatory', 400);
+    }
+
     let discountPercentage = null;
     if (serviceType === 'DISCOUNTED' && actualPrice && discountedPrice) {
       discountPercentage = Math.round(((actualPrice - discountedPrice) / actualPrice) * 100);
@@ -565,6 +570,13 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
     }
     if (termsAndConditions !== undefined && (!termsAndConditions || !termsAndConditions.trim())) {
       throw new AppError('Terms and conditions cannot be empty', 400);
+    }
+
+    if (media !== undefined) {
+      const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+      if (photos.length < 3) {
+        throw new AppError('At least 3 photos are mandatory', 400);
+      }
     }
 
     let discountPercentage = null;

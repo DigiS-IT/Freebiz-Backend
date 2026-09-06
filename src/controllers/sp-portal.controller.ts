@@ -426,16 +426,20 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
     const formatted = services.map((s) => {
       const serviceName = s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service');
       const serviceType = s.serviceType.toLowerCase();
+      const serviceLogo = s.media.find(m => m.mediaType === 'PHOTO')?.thumbnailUrl || s.media.find(m => m.mediaType === 'PHOTO')?.mediaUrl || s.media[0]?.mediaUrl || null;
       const mappedSlots = s.slots.map(slot => ({
         id: slot.id,
         serviceId: slot.serviceId,
         serviceName,
         serviceType,
+        serviceLogo,
         fromDate: slot.startDate.toISOString().split('T')[0],
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
         isActive: slot.isActive,
+        createdAt: slot.createdAt.toISOString(),
+        updatedAt: slot.updatedAt.toISOString(),
       }));
       allSlots.push(...mappedSlots);
 
@@ -485,30 +489,59 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
 
     const { serviceId, fromDate, toDate, dailyCount } = req.body;
 
-    if (!serviceId || !fromDate || !toDate || !dailyCount) {
+    if (!serviceId || !fromDate || !toDate || dailyCount === undefined) {
       throw new AppError('Missing required fields', 400);
     }
 
-    // Verify service belongs to SP
+    const dc = parseInt(dailyCount.toString());
+    if (isNaN(dc) || dc < 1) {
+      throw new AppError('Daily count must be at least 1', 400);
+    }
+
+    // Verify service belongs to SP and is not deleted
     const service = await prisma.service.findFirst({
-      where: { id: serviceId, serviceProviderId: spId }
+      where: { id: serviceId, serviceProviderId: spId, isDeleted: false }
     });
 
     if (!service) {
       throw new AppError('Service not found or unauthorized', 404);
     }
 
+    // Date validation: From Date and To Date cannot be in the past, and To Date >= From Date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const start = new Date(fromDate);
+    start.setHours(0, 0, 0, 0);
+
     const end = new Date(toDate);
+    end.setHours(0, 0, 0, 0);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new AppError('Invalid start or end date', 400);
+    }
+
+    if (start.getTime() < today.getTime()) {
+      throw new AppError('From date must be equal to or greater than the current date', 400);
+    }
+
+    if (end.getTime() < today.getTime()) {
+      throw new AppError('To date must be equal to or greater than the current date', 400);
+    }
+
+    if (end.getTime() < start.getTime()) {
+      throw new AppError('To date must be greater than or equal to from date', 400);
+    }
+
     const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dailyCount * days;
+    const totalCount = dc * days;
 
     const slot = await prisma.serviceSlot.create({
       data: {
         serviceId,
         startDate: start,
         endDate: end,
-        dailyCount,
+        dailyCount: dc,
         totalCount,
         isActive: true,
       },
@@ -523,6 +556,8 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
+        createdAt: slot.createdAt.toISOString(),
+        updatedAt: slot.updatedAt.toISOString(),
       },
       totalCount
     });
@@ -609,6 +644,8 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: updated.endDate.toISOString().split('T')[0],
         dailyCount: updated.dailyCount,
         totalCount: updated.totalCount,
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
       },
       totalCount
     });

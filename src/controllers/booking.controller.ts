@@ -34,8 +34,8 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
         },
       });
 
-      if (!service || !service.isActive) {
-        throw new AppError('Service not found or unavailable', 404);
+      if (!service || !service.isActive || service.isDeleted) {
+        throw new AppError('This service is no longer valid. Please select another service.', 400);
       }
 
       if (service.serviceProvider.isDisabled) {

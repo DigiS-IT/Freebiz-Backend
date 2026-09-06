@@ -128,12 +128,55 @@ export const getSpDashboard = async (req: AuthRequest, res: Response, next: Next
       { label: 'Cancellation Rate', change: -2 },
     ];
 
+    // 5. Subscription Status, Expiry Days & Admin Contact Info
+    const provider = await prisma.serviceProviderProfile.findUnique({
+      where: { id: spId },
+      include: {
+        subscriptions: {
+          orderBy: { endDate: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    let subscriptionInfo = null;
+    if (provider) {
+      const activeSub = provider.subscriptions?.[0] || null;
+      let expiryDays = 0;
+      let isSubscriptionActive = false;
+
+      if (activeSub) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const end = new Date(activeSub.endDate);
+        end.setHours(0, 0, 0, 0);
+        expiryDays = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        isSubscriptionActive = activeSub.status === 'ACTIVE' && expiryDays > 0 && !provider.isDisabled;
+      }
+
+      const superAdminUser = await prisma.user.findFirst({
+        where: { role: UserRole.SUPER_ADMIN, isActive: true },
+        select: { phone: true, email: true },
+      });
+
+      subscriptionInfo = {
+        status: provider.isDisabled ? 'DISABLED' : (isSubscriptionActive ? 'ACTIVE' : 'EXPIRED'),
+        expiryDays: Math.max(0, expiryDays),
+        expiryDate: activeSub?.endDate ? activeSub.endDate.toISOString().split('T')[0] : null,
+        adminContact: {
+          phone: superAdminUser?.phone || '9876543210',
+          email: superAdminUser?.email || 'admin@freebiz.com',
+        },
+      };
+    }
+
     res.status(200).json({
       success: true,
       stats,
       weeklyData,
       monthlyStats,
       comparisonMetrics,
+      subscriptionInfo,
     });
   } catch (error) {
     next(error);
@@ -284,6 +327,34 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       ? Math.round((reviews.reduce((sum, r) => sum + r.stars, 0) / totalReviews) * 10) / 10
       : 0;
 
+    const activeSub = provider.subscriptions?.[0] || null;
+    let expiryDays = 0;
+    let isSubscriptionActive = false;
+
+    if (activeSub) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const end = new Date(activeSub.endDate);
+      end.setHours(0, 0, 0, 0);
+      expiryDays = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      isSubscriptionActive = activeSub.status === 'ACTIVE' && expiryDays > 0 && !provider.isDisabled;
+    }
+
+    const superAdminUser = await prisma.user.findFirst({
+      where: { role: UserRole.SUPER_ADMIN, isActive: true },
+      select: { phone: true, email: true },
+    });
+
+    const subscriptionInfo = {
+      status: provider.isDisabled ? 'DISABLED' : (isSubscriptionActive ? 'ACTIVE' : 'EXPIRED'),
+      expiryDays: Math.max(0, expiryDays),
+      expiryDate: activeSub?.endDate ? activeSub.endDate.toISOString().split('T')[0] : null,
+      adminContact: {
+        phone: superAdminUser?.phone || '9876543210',
+        email: superAdminUser?.email || 'admin@freebiz.com',
+      },
+    };
+
     res.status(200).json({
       success: true,
       data: {
@@ -297,7 +368,8 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
         avgRating,
         totalReviews,
         services: provider.services,
-        subscription: provider.subscriptions[0] || null
+        subscription: provider.subscriptions[0] || null,
+        subscriptionInfo,
       }
     });
   } catch (error) {

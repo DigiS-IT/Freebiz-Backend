@@ -451,6 +451,13 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       media,
     } = req.body;
 
+    if (!specialInstructions || !specialInstructions.trim()) {
+      throw new AppError('Special instructions are mandatory', 400);
+    }
+    if (!termsAndConditions || !termsAndConditions.trim()) {
+      throw new AppError('Terms and conditions are mandatory', 400);
+    }
+
     let discountPercentage = null;
     if (serviceType === 'DISCOUNTED' && actualPrice && discountedPrice) {
       discountPercentage = Math.round(((actualPrice - discountedPrice) / actualPrice) * 100);
@@ -466,8 +473,8 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
         city,
         latitude: parseFloat(latitude.toString()),
         longitude: parseFloat(longitude.toString()),
-        specialInstructions: specialInstructions || null,
-        termsAndConditions: termsAndConditions || null,
+        specialInstructions: specialInstructions.trim(),
+        termsAndConditions: termsAndConditions.trim(),
         actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
         discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
         discountPercentage,
@@ -553,8 +560,11 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
       where: { id, serviceProviderId: spId }
     });
 
-    if (!existingService) {
-      throw new AppError('Service not found or unauthorized', 404);
+    if (specialInstructions !== undefined && (!specialInstructions || !specialInstructions.trim())) {
+      throw new AppError('Special instructions cannot be empty', 400);
+    }
+    if (termsAndConditions !== undefined && (!termsAndConditions || !termsAndConditions.trim())) {
+      throw new AppError('Terms and conditions cannot be empty', 400);
     }
 
     let discountPercentage = null;
@@ -572,8 +582,8 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
         city,
         latitude: parseFloat(latitude.toString()),
         longitude: parseFloat(longitude.toString()),
-        specialInstructions: specialInstructions || null,
-        termsAndConditions: termsAndConditions || null,
+        specialInstructions: specialInstructions !== undefined ? specialInstructions.trim() : undefined,
+        termsAndConditions: termsAndConditions !== undefined ? termsAndConditions.trim() : undefined,
         actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
         discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
         discountPercentage,

@@ -539,10 +539,15 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Service provider profile not found', 400);
     }
 
-    const { slotId, dailyCount } = req.body;
+    const { slotId, dailyCount, fromDate, toDate } = req.body;
 
     if (!slotId || dailyCount === undefined) {
       throw new AppError('Missing required fields', 400);
+    }
+
+    const dc = parseInt(dailyCount.toString());
+    if (isNaN(dc) || dc < 1) {
+      throw new AppError('Daily count must be at least 1', 400);
     }
 
     // Verify slot belongs to SP's service
@@ -550,6 +555,9 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       where: {
         id: slotId,
         service: { serviceProviderId: spId }
+      },
+      include: {
+        service: true
       }
     });
 
@@ -557,15 +565,40 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Slot not found or unauthorized', 404);
     }
 
-    const start = new Date(slot.startDate);
-    const end = new Date(slot.endDate);
+    const start = fromDate ? new Date(fromDate) : new Date(slot.startDate);
+    const end = toDate ? new Date(toDate) : new Date(slot.endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new AppError('Invalid start or end date', 400);
+    }
+
+    if (end.getTime() < start.getTime()) {
+      throw new AppError('End date must be on or after start date', 400);
+    }
+
     const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dailyCount * days;
+    const totalCount = dc * days;
 
     const updated = await prisma.serviceSlot.update({
       where: { id: slotId },
-      data: { dailyCount, totalCount },
+      data: {
+        startDate: start,
+        endDate: end,
+        dailyCount: dc,
+        totalCount
+      },
     });
+
+    // Also update parent service dates to keep them synchronized
+    if (fromDate || toDate) {
+      await prisma.service.update({
+        where: { id: slot.serviceId },
+        data: {
+          startDate: start,
+          endDate: end,
+        }
+      });
+    }
 
     res.status(200).json({
       success: true,

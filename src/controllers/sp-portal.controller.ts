@@ -427,7 +427,18 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
       const serviceName = s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service');
       const serviceType = s.serviceType.toLowerCase();
       const serviceLogo = s.media.find(m => m.mediaType === 'PHOTO')?.thumbnailUrl || s.media.find(m => m.mediaType === 'PHOTO')?.mediaUrl || s.media[0]?.mediaUrl || null;
-      const mappedSlots = s.slots.map(slot => ({
+
+      // Enforce "One service. One slot.": if multiple slots exist historically, clean up older duplicates
+      if (s.slots.length > 1) {
+        const duplicateIds = s.slots.slice(1).map(sl => sl.id);
+        prisma.serviceSlot.updateMany({
+          where: { id: { in: duplicateIds } },
+          data: { isDeleted: true, deletedAt: new Date(), isActive: false }
+        }).catch(err => console.error('Error cleaning duplicate slots:', err));
+      }
+
+      const primarySlots = s.slots.slice(0, 1);
+      const mappedSlots = primarySlots.map(slot => ({
         id: slot.id,
         serviceId: slot.serviceId,
         serviceName,
@@ -505,6 +516,15 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
 
     if (!service) {
       throw new AppError('Service not found or unauthorized', 404);
+    }
+
+    // Enforce "One service. One slot.": check if an active slot already exists for this service
+    const existingSlot = await prisma.serviceSlot.findFirst({
+      where: { serviceId, isDeleted: false }
+    });
+
+    if (existingSlot) {
+      throw new AppError('This service already has an active slot. Each service can only have one slot. Please edit the existing slot instead.', 400);
     }
 
     // Date validation: From Date and To Date cannot be in the past, and To Date >= From Date

@@ -33,7 +33,10 @@ export const createServiceSchema = z.object({
       thumbnailUrl: z.string().optional().nullable(),
       order: z.number().optional(),
     })
-  ).optional(),
+  ).refine(
+    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
+    { message: 'At least 3 photos are mandatory' }
+  ),
 });
 
 export const updateServiceSchema = z.object({
@@ -58,5 +61,8 @@ export const updateServiceSchema = z.object({
       thumbnailUrl: z.string().optional().nullable(),
       order: z.number().optional(),
     })
+  ).refine(
+    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
+    { message: 'At least 3 photos are mandatory' }
   ).optional(),
 });

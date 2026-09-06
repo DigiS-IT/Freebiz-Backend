@@ -148,8 +148,36 @@ export const getSpBookings = async (req: AuthRequest, res: Response, next: NextF
       return res.status(200).json({ success: true, data: [] });
     }
 
+    const { status, serviceType, fromDate, toDate } = req.query;
+
+    const whereClause: any = {
+      service: {
+        serviceProviderId: spId,
+      },
+    };
+
+    if (status && status !== 'all') {
+      whereClause.status = (status as string).toUpperCase();
+    }
+
+    if (serviceType && serviceType !== 'both' && serviceType !== 'all') {
+      whereClause.service.serviceType = (serviceType as string).toUpperCase();
+    }
+
+    if (fromDate || toDate) {
+      whereClause.bookingDate = {};
+      if (fromDate) {
+        whereClause.bookingDate.gte = new Date(fromDate as string);
+      }
+      if (toDate) {
+        const endOfDay = new Date(toDate as string);
+        endOfDay.setHours(23, 59, 59, 999);
+        whereClause.bookingDate.lte = endOfDay;
+      }
+    }
+
     const bookings = await prisma.booking.findMany({
-      where: { service: { serviceProviderId: spId } },
+      where: whereClause,
       include: {
         customer: {
           include: {

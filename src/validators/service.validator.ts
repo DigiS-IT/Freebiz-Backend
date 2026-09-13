@@ -19,8 +19,8 @@ export const createServiceSchema = z.object({
   city: z.string(),
   latitude: z.number(),
   longitude: z.number(),
-  specialInstructions: z.string().optional().nullable(),
-  termsAndConditions: z.string().optional().nullable(),
+  specialInstructions: z.string({ required_error: 'Special instructions are mandatory' }).min(1, 'Special instructions are mandatory'),
+  termsAndConditions: z.string({ required_error: 'Terms and conditions are mandatory' }).min(1, 'Terms and conditions are mandatory'),
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),
   parentId: z.string().uuid().optional().nullable(),
@@ -33,7 +33,10 @@ export const createServiceSchema = z.object({
       thumbnailUrl: z.string().optional().nullable(),
       order: z.number().optional(),
     })
-  ).optional(),
+  ).refine(
+    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
+    { message: 'At least 3 photos are mandatory' }
+  ),
 });
 
 export const updateServiceSchema = z.object({
@@ -44,8 +47,8 @@ export const updateServiceSchema = z.object({
   city: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
-  specialInstructions: z.string().optional().nullable(),
-  termsAndConditions: z.string().optional().nullable(),
+  specialInstructions: z.string().min(1, 'Special instructions cannot be empty').optional(),
+  termsAndConditions: z.string().min(1, 'Terms and conditions cannot be empty').optional(),
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),
   parentId: z.string().uuid().optional().nullable(),
@@ -58,5 +61,8 @@ export const updateServiceSchema = z.object({
       thumbnailUrl: z.string().optional().nullable(),
       order: z.number().optional(),
     })
+  ).refine(
+    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
+    { message: 'At least 3 photos are mandatory' }
   ).optional(),
 });

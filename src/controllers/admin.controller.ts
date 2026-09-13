@@ -233,6 +233,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 4. Service Distribution: Free Services, Discounted Services, Other Services
     const allServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       include: { bookings: true },
     });
 
@@ -257,6 +258,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 6. Booking Conversion Funnel
     const totalSlotsCount = await prisma.serviceSlot.aggregate({
+      where: { isDeleted: false },
       _sum: {
         totalCount: true,
       },
@@ -299,6 +301,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
     // 8. Detailed Top Booking Services directly from Service & Booking tables in Database
     const topServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       include: {
         bookings: true,
         serviceProvider: true,
@@ -377,6 +380,7 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
     });
 
     const recentServices = await prisma.service.findMany({
+      where: { isDeleted: false },
       take: 4,
       orderBy: { createdAt: 'desc' },
       include: { serviceProvider: { select: { businessName: true } } },
@@ -491,7 +495,10 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
       where: whereClause,
       include: {
         users: true,
-        services: { include: { slots: true } },
+        services: {
+          where: { isDeleted: false },
+          include: { slots: { where: { isDeleted: false } } },
+        },
         subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
       orderBy: { createdAt: 'desc' },
@@ -523,7 +530,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
         registeredOn: p.createdAt.toISOString(),
         services: p.services.map((s) => ({
           id: s.id,
-          name: s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service',
+          name: s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
           type: s.serviceType.toLowerCase(),
           discountPercentage: s.discountPercentage,
         })),
@@ -698,7 +705,7 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
         },
         data: {
           password: hashedPassword,
-          mustChangePassword: false,
+          mustChangePassword: true,
         },
       });
       passwordUpdated = true;
@@ -914,8 +921,29 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
   try {
     const providers = await prisma.serviceProviderProfile.findMany({
       include: {
-        users: { select: { phone: true, email: true } },
-        services: { select: { city: true, contactNumber: true } },
+        users: {
+          select: {
+            id: true,
+            phone: true,
+            email: true,
+            role: true,
+            isActive: true,
+            createdAt: true,
+            lastLoginAt: true,
+          },
+        },
+        services: {
+          where: { isDeleted: false },
+          select: {
+            id: true,
+            serviceDetail: true,
+            serviceType: true,
+            serviceMode: true,
+            city: true,
+            contactNumber: true,
+            isActive: true,
+          },
+        },
         subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
     });
@@ -933,19 +961,46 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
       const contact = p.primaryContact || service?.contactNumber || spUser?.phone || 'No Contact';
       const city = p.city || service?.city || 'No City';
 
+      const commonDetails = {
+        spId: p.id,
+        spName: p.businessName,
+        spContact: contact,
+        secondaryContact: p.secondaryContact || '',
+        spEmail: email,
+        spCity: city,
+        spAddress: p.address || '—',
+        isDisabled: p.isDisabled,
+        registeredOn: p.createdAt ? p.createdAt.toISOString().split('T')[0] : '—',
+        usersCount: p.users.length,
+        users: p.users.map((u) => ({
+          id: u.id,
+          phone: u.phone,
+          email: u.email || '',
+          role: u.role,
+          isActive: u.isActive,
+          lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
+        })),
+        servicesCount: p.services.length,
+        services: p.services.map((s) => ({
+          id: s.id,
+          detail: s.serviceDetail,
+          type: s.serviceType,
+          mode: s.serviceMode,
+          city: s.city,
+          isActive: s.isActive,
+        })),
+      };
+
       if (!activeSub) {
         records.push({
           id: `no-sub-${p.id}`,
-          spId: p.id,
-          spName: p.businessName,
-          spContact: contact,
-          spEmail: email,
-          spCity: city,
+          ...commonDetails,
           startDate: '—',
           endDate: '—',
           daysRemaining: -999,
           status: 'NONE',
           subId: null,
+          planName: 'No Subscription',
         });
       } else {
         const endDate = new Date(activeSub.endDate);
@@ -956,45 +1011,63 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
         const isExpired = activeSub.status === SubscriptionStatus.EXPIRED || daysRemaining < 0;
         const isExpiringSoon = !isExpired && daysRemaining <= 15;
 
-        if (isExpiringSoon || isExpired) {
-          records.push({
-            id: activeSub.id,
-            spId: p.id,
-            spName: p.businessName,
-            spContact: contact,
-            spEmail: email,
-            spCity: city,
-            startDate: activeSub.startDate.toISOString().split('T')[0],
-            endDate: activeSub.endDate.toISOString().split('T')[0],
-            daysRemaining,
-            status: isExpired ? 'EXPIRED' : 'EXPIRING_SOON',
-            subId: activeSub.id,
-          });
+        let status: 'EXPIRED' | 'EXPIRING_SOON' | 'ACTIVE' = 'ACTIVE';
+        if (isExpired) {
+          status = 'EXPIRED';
+        } else if (isExpiringSoon) {
+          status = 'EXPIRING_SOON';
+        } else {
+          status = 'ACTIVE';
         }
+
+        records.push({
+          id: activeSub.id,
+          ...commonDetails,
+          startDate: activeSub.startDate.toISOString().split('T')[0],
+          endDate: activeSub.endDate.toISOString().split('T')[0],
+          daysRemaining,
+          status,
+          subId: activeSub.id,
+          planName: activeSub.notes || 'Standard Plan',
+        });
       }
     });
 
-    // SORTING: Lesser expiry days MUST come on top! (e.g. 0, 1, 2, 3 days... followed by expired items)
+    // SORTING: Priority order: EXPIRING_SOON (0..15 days) -> ACTIVE (>15 days) -> EXPIRED -> NONE
     records.sort((a, b) => {
-      // If both are expiring soon (daysRemaining >= 0), sort ascending (lesser days first)
-      if (a.daysRemaining >= 0 && b.daysRemaining >= 0) {
+      const getPriority = (status: string) => {
+        if (status === 'EXPIRING_SOON') return 1;
+        if (status === 'ACTIVE') return 2;
+        if (status === 'EXPIRED') return 3;
+        return 4; // NONE
+      };
+
+      const pA = getPriority(a.status);
+      const pB = getPriority(b.status);
+
+      if (pA !== pB) return pA - pB;
+
+      if (a.status === 'EXPIRING_SOON' || a.status === 'ACTIVE') {
         return a.daysRemaining - b.daysRemaining;
       }
-      // If one is expiring soon and one is expired/none, expiring soon comes first (urgent action!)
-      if (a.daysRemaining >= 0 && b.daysRemaining < 0) return -1;
-      if (a.daysRemaining < 0 && b.daysRemaining >= 0) return 1;
-      // If both are expired (daysRemaining < 0), sort most recently expired first
-      return b.daysRemaining - a.daysRemaining;
+      if (a.status === 'EXPIRED') {
+        return b.daysRemaining - a.daysRemaining; // most recently expired first
+      }
+      return a.spName.localeCompare(b.spName);
     });
 
     const expiringSoonCount = records.filter((r) => r.status === 'EXPIRING_SOON').length;
-    const expiredCount = records.filter((r) => r.status === 'EXPIRED' || r.status === 'NONE').length;
+    const activeCount = records.filter((r) => r.status === 'ACTIVE').length;
+    const expiredCount = records.filter((r) => r.status === 'EXPIRED').length;
+    const noSubCount = records.filter((r) => r.status === 'NONE').length;
 
     res.status(200).json({
       success: true,
       records,
       expiringSoonCount,
+      activeCount,
       expiredCount,
+      noSubCount,
       totalCount: records.length,
     });
   } catch (error) {

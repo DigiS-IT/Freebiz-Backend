@@ -8,6 +8,7 @@ import ratingRoutes from './rating.routes';
 import spPortalRoutes from './sp-portal.routes';
 import adminRoutes from './admin.routes';
 import uploadRoutes from './upload.routes';
+import locationRoutes from './location.routes';
 
 const router = Router();
 
@@ -19,6 +20,9 @@ router.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Public locations API (common API for states and cities dropdowns)
+router.use('/locations', locationRoutes);
 
 // Public routes
 router.use('/auth', authRoutes);

@@ -4,7 +4,7 @@ import * as serviceController from '../controllers/service.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { spOnly, spSuperAdminOnly } from '../middlewares/role.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 // Statistics & Bookings
 router.get('/dashboard', authenticate, spOnly, spController.getSpDashboard);
@@ -16,6 +16,8 @@ router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpPro
 router.get('/profile', authenticate, spOnly, spController.getSpProfile);
 router.post('/staff', authenticate, spSuperAdminOnly, spController.createSpUser);
 router.get('/staff', authenticate, spSuperAdminOnly, spController.getSpUsers);
+router.put('/staff/:userId', authenticate, spSuperAdminOnly, spController.updateSpUser);
+router.delete('/staff/:userId', authenticate, spSuperAdminOnly, spController.deleteSpUser);
 router.put('/staff/:userId/password', authenticate, spSuperAdminOnly, spController.updateSpUserPassword);
 
 // Slot management

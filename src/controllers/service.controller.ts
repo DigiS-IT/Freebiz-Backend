@@ -25,6 +25,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
     // Build where clause
     const where: any = {
       isActive: true,
+      isDeleted: false,
       serviceMode: 'IN_PERSON',
     };
 
@@ -318,8 +319,8 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
       },
     });
 
-    if (!service || !service.isActive) {
-      throw new AppError('Service not found', 404);
+    if (!service || !service.isActive || service.isDeleted) {
+      throw new AppError('This service is no longer valid. Please select another service.', 404);
     }
 
     if (service.serviceProvider.isDisabled) {
@@ -451,42 +452,106 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       media,
     } = req.body;
 
+    if (!specialInstructions || !specialInstructions.trim()) {
+      throw new AppError('Special instructions are mandatory', 400);
+    }
+    if (!termsAndConditions || !termsAndConditions.trim()) {
+      throw new AppError('Terms and conditions are mandatory', 400);
+    }
+
+    const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+    if (photos.length < 3) {
+      throw new AppError('At least 3 photos are mandatory', 400);
+    }
+
     let discountPercentage = null;
     if (serviceType === 'DISCOUNTED' && actualPrice && discountedPrice) {
       discountPercentage = Math.round(((actualPrice - discountedPrice) / actualPrice) * 100);
     }
 
-    const service = await prisma.service.create({
-      data: {
+    // Check if a previously deleted service with the same name and type exists for this SP
+    const existingDeletedService = await prisma.service.findFirst({
+      where: {
         serviceProviderId: spId,
         serviceType,
-        serviceDetail,
-        contactNumber,
-        address,
-        city,
-        latitude: parseFloat(latitude.toString()),
-        longitude: parseFloat(longitude.toString()),
-        specialInstructions: specialInstructions || null,
-        termsAndConditions: termsAndConditions || null,
-        actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
-        discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
-        discountPercentage,
-        parentId: serviceType === 'FREE' ? (parentId || null) : null,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
+        serviceDetail: { equals: serviceDetail.trim(), mode: 'insensitive' },
+        isDeleted: true,
       },
     });
 
-    if (media && Array.isArray(media) && media.length > 0) {
-      await prisma.serviceMedia.createMany({
-        data: media.map((item: any, idx: number) => ({
-          serviceId: service.id,
-          mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
-          mediaUrl: item.mediaUrl,
-          thumbnailUrl: item.thumbnailUrl || null,
-          order: item.order ?? idx,
-        })),
+    let service: any;
+    if (existingDeletedService) {
+      service = await prisma.service.update({
+        where: { id: existingDeletedService.id },
+        data: {
+          serviceDetail: serviceDetail.trim(),
+          contactNumber,
+          address,
+          city,
+          latitude: parseFloat(latitude.toString()),
+          longitude: parseFloat(longitude.toString()),
+          specialInstructions: specialInstructions.trim(),
+          termsAndConditions: termsAndConditions.trim(),
+          actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
+          discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
+          discountPercentage,
+          parentId: serviceType === 'FREE' ? (parentId || null) : null,
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+          isActive: true,
+          isDeleted: false,
+          deletedAt: null,
+        },
       });
+
+      if (media && Array.isArray(media) && media.length > 0) {
+        await prisma.serviceMedia.deleteMany({ where: { serviceId: existingDeletedService.id } });
+        await prisma.serviceMedia.createMany({
+          data: media.map((item: any, idx: number) => ({
+            serviceId: existingDeletedService.id,
+            mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
+            mediaUrl: item.mediaUrl,
+            thumbnailUrl: item.thumbnailUrl || null,
+            order: item.order ?? idx,
+          })),
+        });
+      }
+    } else {
+      service = await prisma.service.create({
+        data: {
+          serviceProviderId: spId,
+          serviceType,
+          serviceDetail: serviceDetail.trim(),
+          contactNumber,
+          address,
+          city,
+          latitude: parseFloat(latitude.toString()),
+          longitude: parseFloat(longitude.toString()),
+          specialInstructions: specialInstructions.trim(),
+          termsAndConditions: termsAndConditions.trim(),
+          actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
+          discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
+          discountPercentage,
+          parentId: serviceType === 'FREE' ? (parentId || null) : null,
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+          isActive: true,
+          isDeleted: false,
+          deletedAt: null,
+        },
+      });
+
+      if (media && Array.isArray(media) && media.length > 0) {
+        await prisma.serviceMedia.createMany({
+          data: media.map((item: any, idx: number) => ({
+            serviceId: service.id,
+            mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
+            mediaUrl: item.mediaUrl,
+            thumbnailUrl: item.thumbnailUrl || null,
+            order: item.order ?? idx,
+          })),
+        });
+      }
     }
     if (serviceType === 'DISCOUNTED') {
       const sp = await prisma.serviceProviderProfile.findUnique({
@@ -553,8 +618,18 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
       where: { id, serviceProviderId: spId }
     });
 
-    if (!existingService) {
-      throw new AppError('Service not found or unauthorized', 404);
+    if (specialInstructions !== undefined && (!specialInstructions || !specialInstructions.trim())) {
+      throw new AppError('Special instructions cannot be empty', 400);
+    }
+    if (termsAndConditions !== undefined && (!termsAndConditions || !termsAndConditions.trim())) {
+      throw new AppError('Terms and conditions cannot be empty', 400);
+    }
+
+    if (media !== undefined) {
+      const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+      if (photos.length < 3) {
+        throw new AppError('At least 3 photos are mandatory', 400);
+      }
     }
 
     let discountPercentage = null;
@@ -572,8 +647,8 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
         city,
         latitude: parseFloat(latitude.toString()),
         longitude: parseFloat(longitude.toString()),
-        specialInstructions: specialInstructions || null,
-        termsAndConditions: termsAndConditions || null,
+        specialInstructions: specialInstructions !== undefined ? specialInstructions.trim() : undefined,
+        termsAndConditions: termsAndConditions !== undefined ? termsAndConditions.trim() : undefined,
         actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
         discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
         discountPercentage,
@@ -635,22 +710,76 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
 export const deleteService = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const spId = req.user!.serviceProviderId;
+    const spId = req.user?.serviceProviderId;
+    const role = req.user?.role;
+    const isSuperAdmin = role === 'SUPER_ADMIN';
 
-    if (!spId) {
-      throw new AppError('Service provider profile not found', 400);
+    let existingService;
+    if (isSuperAdmin) {
+      existingService = await prisma.service.findFirst({
+        where: { id, isDeleted: false },
+      });
+    } else {
+      if (!spId) {
+        throw new AppError('Service provider profile not found', 400);
+      }
+      existingService = await prisma.service.findFirst({
+        where: { id, serviceProviderId: spId, isDeleted: false },
+      });
     }
-
-    const existingService = await prisma.service.findFirst({
-      where: { id, serviceProviderId: spId }
-    });
 
     if (!existingService) {
       throw new AppError('Service not found or unauthorized', 404);
     }
 
-    await prisma.service.delete({
-      where: { id }
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Soft-delete the service
+      await tx.service.update({
+        where: { id },
+        data: {
+          isActive: false,
+          isDeleted: true,
+          deletedAt: now,
+        },
+      });
+
+      // 2. Soft-delete all associated slots
+      await tx.serviceSlot.updateMany({
+        where: { serviceId: id },
+        data: {
+          isActive: false,
+          isDeleted: true,
+          deletedAt: now,
+        },
+      });
+
+      // 3. If parent service, soft-delete child sub-services and their slots
+      const subServices = await tx.service.findMany({
+        where: { parentId: id, isDeleted: false },
+        select: { id: true },
+      });
+
+      if (subServices.length > 0) {
+        const subIds = subServices.map((s) => s.id);
+        await tx.service.updateMany({
+          where: { id: { in: subIds } },
+          data: {
+            isActive: false,
+            isDeleted: true,
+            deletedAt: now,
+          },
+        });
+        await tx.serviceSlot.updateMany({
+          where: { serviceId: { in: subIds } },
+          data: {
+            isActive: false,
+            isDeleted: true,
+            deletedAt: now,
+          },
+        });
+      }
     });
 
     res.status(200).json({

@@ -41,9 +41,9 @@ export const getSpDashboard = async (req: AuthRequest, res: Response, next: Next
 
     // 1. Fetch services & booking metrics for this SP from DB
     const services = await prisma.service.findMany({
-      where: { serviceProviderId: spId },
+      where: { serviceProviderId: spId, isDeleted: false },
       include: {
-        slots: true,
+        slots: { where: { isDeleted: false } },
         bookings: true,
       },
     });
@@ -128,12 +128,55 @@ export const getSpDashboard = async (req: AuthRequest, res: Response, next: Next
       { label: 'Cancellation Rate', change: -2 },
     ];
 
+    // 5. Subscription Status, Expiry Days & Admin Contact Info
+    const provider = await prisma.serviceProviderProfile.findUnique({
+      where: { id: spId },
+      include: {
+        subscriptions: {
+          orderBy: { endDate: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    let subscriptionInfo = null;
+    if (provider) {
+      const activeSub = provider.subscriptions?.[0] || null;
+      let expiryDays = 0;
+      let isSubscriptionActive = false;
+
+      if (activeSub) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const end = new Date(activeSub.endDate);
+        end.setHours(0, 0, 0, 0);
+        expiryDays = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        isSubscriptionActive = activeSub.status === 'ACTIVE' && expiryDays > 0 && !provider.isDisabled;
+      }
+
+      const superAdminUser = await prisma.user.findFirst({
+        where: { role: UserRole.SUPER_ADMIN, isActive: true },
+        select: { phone: true, email: true },
+      });
+
+      subscriptionInfo = {
+        status: provider.isDisabled ? 'DISABLED' : (isSubscriptionActive ? 'ACTIVE' : 'EXPIRED'),
+        expiryDays: Math.max(0, expiryDays),
+        expiryDate: activeSub?.endDate ? activeSub.endDate.toISOString().split('T')[0] : null,
+        adminContact: {
+          phone: superAdminUser?.phone || '9876543210',
+          email: superAdminUser?.email || 'admin@freebiz.com',
+        },
+      };
+    }
+
     res.status(200).json({
       success: true,
       stats,
       weeklyData,
       monthlyStats,
       comparisonMetrics,
+      subscriptionInfo,
     });
   } catch (error) {
     next(error);
@@ -148,8 +191,36 @@ export const getSpBookings = async (req: AuthRequest, res: Response, next: NextF
       return res.status(200).json({ success: true, data: [] });
     }
 
+    const { status, serviceType, fromDate, toDate } = req.query;
+
+    const whereClause: any = {
+      service: {
+        serviceProviderId: spId,
+      },
+    };
+
+    if (status && status !== 'all') {
+      whereClause.status = (status as string).toUpperCase();
+    }
+
+    if (serviceType && serviceType !== 'both' && serviceType !== 'all') {
+      whereClause.service.serviceType = (serviceType as string).toUpperCase();
+    }
+
+    if (fromDate || toDate) {
+      whereClause.bookingDate = {};
+      if (fromDate) {
+        whereClause.bookingDate.gte = new Date(fromDate as string);
+      }
+      if (toDate) {
+        const endOfDay = new Date(toDate as string);
+        endOfDay.setHours(23, 59, 59, 999);
+        whereClause.bookingDate.lte = endOfDay;
+      }
+    }
+
     const bookings = await prisma.booking.findMany({
-      where: { service: { serviceProviderId: spId } },
+      where: whereClause,
       include: {
         customer: {
           include: {
@@ -249,8 +320,9 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       where: { id: spId },
       include: {
         services: {
+          where: { isDeleted: false },
           include: {
-            slots: true,
+            slots: { where: { isDeleted: false } },
             bookings: {
               include: {
                 rating: true,
@@ -284,6 +356,34 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       ? Math.round((reviews.reduce((sum, r) => sum + r.stars, 0) / totalReviews) * 10) / 10
       : 0;
 
+    const activeSub = provider.subscriptions?.[0] || null;
+    let expiryDays = 0;
+    let isSubscriptionActive = false;
+
+    if (activeSub) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const end = new Date(activeSub.endDate);
+      end.setHours(0, 0, 0, 0);
+      expiryDays = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      isSubscriptionActive = activeSub.status === 'ACTIVE' && expiryDays > 0 && !provider.isDisabled;
+    }
+
+    const superAdminUser = await prisma.user.findFirst({
+      where: { role: UserRole.SUPER_ADMIN, isActive: true },
+      select: { phone: true, email: true },
+    });
+
+    const subscriptionInfo = {
+      status: provider.isDisabled ? 'DISABLED' : (isSubscriptionActive ? 'ACTIVE' : 'EXPIRED'),
+      expiryDays: Math.max(0, expiryDays),
+      expiryDate: activeSub?.endDate ? activeSub.endDate.toISOString().split('T')[0] : null,
+      adminContact: {
+        phone: superAdminUser?.phone || '9876543210',
+        email: superAdminUser?.email || 'admin@freebiz.com',
+      },
+    };
+
     res.status(200).json({
       success: true,
       data: {
@@ -297,7 +397,8 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
         avgRating,
         totalReviews,
         services: provider.services,
-        subscription: provider.subscriptions[0] || null
+        subscription: provider.subscriptions[0] || null,
+        subscriptionInfo,
       }
     });
   } catch (error) {
@@ -314,47 +415,76 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
     }
 
     const services = await prisma.service.findMany({
-      where: { serviceProviderId: spId },
+      where: { serviceProviderId: spId, isDeleted: false },
       include: { 
-        slots: { orderBy: { createdAt: 'desc' } },
+        slots: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
         media: { orderBy: { order: 'asc' } },
       },
     });
 
-    const formatted = services.map((s) => ({
-      id: s.id,
-      name: s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service',
-      type: s.serviceType.toLowerCase(),
-      description: s.serviceDetail,
-      actualPrice: s.actualPrice,
-      discountedPrice: s.discountedPrice,
-      discountPercentage: s.discountPercentage,
-      contactNumber: s.contactNumber,
-      address: s.address,
-      city: s.city,
-      latitude: s.latitude,
-      longitude: s.longitude,
-      specialInstructions: s.specialInstructions,
-      termsAndConditions: s.termsAndConditions,
-      parentId: s.parentId,
-      media: s.media.map(m => ({
-        id: m.id,
-        mediaType: m.mediaType,
-        mediaUrl: m.mediaUrl,
-        thumbnailUrl: m.thumbnailUrl,
-        order: m.order,
-      })),
-      slots: s.slots.map(slot => ({
+    const allSlots: any[] = [];
+    const formatted = services.map((s) => {
+      const serviceName = s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service');
+      const serviceType = s.serviceType.toLowerCase();
+      const serviceLogo = s.media.find(m => m.mediaType === 'PHOTO')?.thumbnailUrl || s.media.find(m => m.mediaType === 'PHOTO')?.mediaUrl || s.media[0]?.mediaUrl || null;
+
+      // Enforce "One service. One slot.": if multiple slots exist historically, clean up older duplicates
+      if (s.slots.length > 1) {
+        const duplicateIds = s.slots.slice(1).map(sl => sl.id);
+        prisma.serviceSlot.updateMany({
+          where: { id: { in: duplicateIds } },
+          data: { isDeleted: true, deletedAt: new Date(), isActive: false }
+        }).catch(err => console.error('Error cleaning duplicate slots:', err));
+      }
+
+      const primarySlots = s.slots.slice(0, 1);
+      const mappedSlots = primarySlots.map(slot => ({
         id: slot.id,
         serviceId: slot.serviceId,
+        serviceName,
+        serviceType,
+        serviceLogo,
         fromDate: slot.startDate.toISOString().split('T')[0],
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
-      })),
-    }));
+        isActive: slot.isActive,
+        createdAt: slot.createdAt.toISOString(),
+        updatedAt: slot.updatedAt.toISOString(),
+      }));
+      allSlots.push(...mappedSlots);
 
-    res.status(200).json({ success: true, services: formatted });
+      return {
+        id: s.id,
+        name: serviceName,
+        serviceName,
+        serviceDetail: s.serviceDetail,
+        type: serviceType,
+        serviceType,
+        description: s.serviceDetail,
+        actualPrice: s.actualPrice,
+        discountedPrice: s.discountedPrice,
+        discountPercentage: s.discountPercentage,
+        contactNumber: s.contactNumber,
+        address: s.address,
+        city: s.city,
+        latitude: s.latitude,
+        longitude: s.longitude,
+        specialInstructions: s.specialInstructions,
+        termsAndConditions: s.termsAndConditions,
+        parentId: s.parentId,
+        media: s.media.map(m => ({
+          id: m.id,
+          mediaType: m.mediaType,
+          mediaUrl: m.mediaUrl,
+          thumbnailUrl: m.thumbnailUrl,
+          order: m.order,
+        })),
+        slots: mappedSlots,
+      };
+    });
+
+    res.status(200).json({ success: true, services: formatted, slots: allSlots });
   } catch (error) {
     next(error);
   }
@@ -370,30 +500,68 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
 
     const { serviceId, fromDate, toDate, dailyCount } = req.body;
 
-    if (!serviceId || !fromDate || !toDate || !dailyCount) {
+    if (!serviceId || !fromDate || !toDate || dailyCount === undefined) {
       throw new AppError('Missing required fields', 400);
     }
 
-    // Verify service belongs to SP
+    const dc = parseInt(dailyCount.toString());
+    if (isNaN(dc) || dc < 1) {
+      throw new AppError('Daily count must be at least 1', 400);
+    }
+
+    // Verify service belongs to SP and is not deleted
     const service = await prisma.service.findFirst({
-      where: { id: serviceId, serviceProviderId: spId }
+      where: { id: serviceId, serviceProviderId: spId, isDeleted: false }
     });
 
     if (!service) {
       throw new AppError('Service not found or unauthorized', 404);
     }
 
+    // Enforce "One service. One slot.": check if an active slot already exists for this service
+    const existingSlot = await prisma.serviceSlot.findFirst({
+      where: { serviceId, isDeleted: false }
+    });
+
+    if (existingSlot) {
+      throw new AppError('This service already has an active slot. Each service can only have one slot. Please edit the existing slot instead.', 400);
+    }
+
+    // Date validation: From Date and To Date cannot be in the past, and To Date >= From Date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const start = new Date(fromDate);
+    start.setHours(0, 0, 0, 0);
+
     const end = new Date(toDate);
+    end.setHours(0, 0, 0, 0);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new AppError('Invalid start or end date', 400);
+    }
+
+    if (start.getTime() < today.getTime()) {
+      throw new AppError('From date must be equal to or greater than the current date', 400);
+    }
+
+    if (end.getTime() < today.getTime()) {
+      throw new AppError('To date must be equal to or greater than the current date', 400);
+    }
+
+    if (end.getTime() < start.getTime()) {
+      throw new AppError('To date must be greater than or equal to from date', 400);
+    }
+
     const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dailyCount * days;
+    const totalCount = dc * days;
 
     const slot = await prisma.serviceSlot.create({
       data: {
         serviceId,
         startDate: start,
         endDate: end,
-        dailyCount,
+        dailyCount: dc,
         totalCount,
         isActive: true,
       },
@@ -408,6 +576,8 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
+        createdAt: slot.createdAt.toISOString(),
+        updatedAt: slot.updatedAt.toISOString(),
       },
       totalCount
     });
@@ -424,10 +594,15 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Service provider profile not found', 400);
     }
 
-    const { slotId, dailyCount } = req.body;
+    const { slotId, dailyCount, fromDate, toDate } = req.body;
 
     if (!slotId || dailyCount === undefined) {
       throw new AppError('Missing required fields', 400);
+    }
+
+    const dc = parseInt(dailyCount.toString());
+    if (isNaN(dc) || dc < 1) {
+      throw new AppError('Daily count must be at least 1', 400);
     }
 
     // Verify slot belongs to SP's service
@@ -435,6 +610,9 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       where: {
         id: slotId,
         service: { serviceProviderId: spId }
+      },
+      include: {
+        service: true
       }
     });
 
@@ -442,15 +620,40 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Slot not found or unauthorized', 404);
     }
 
-    const start = new Date(slot.startDate);
-    const end = new Date(slot.endDate);
+    const start = fromDate ? new Date(fromDate) : new Date(slot.startDate);
+    const end = toDate ? new Date(toDate) : new Date(slot.endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new AppError('Invalid start or end date', 400);
+    }
+
+    if (end.getTime() < start.getTime()) {
+      throw new AppError('End date must be on or after start date', 400);
+    }
+
     const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dailyCount * days;
+    const totalCount = dc * days;
 
     const updated = await prisma.serviceSlot.update({
       where: { id: slotId },
-      data: { dailyCount, totalCount },
+      data: {
+        startDate: start,
+        endDate: end,
+        dailyCount: dc,
+        totalCount
+      },
     });
+
+    // Also update parent service dates to keep them synchronized
+    if (fromDate || toDate) {
+      await prisma.service.update({
+        where: { id: slot.serviceId },
+        data: {
+          startDate: start,
+          endDate: end,
+        }
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -461,6 +664,8 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: updated.endDate.toISOString().split('T')[0],
         dailyCount: updated.dailyCount,
         totalCount: updated.totalCount,
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
       },
       totalCount
     });
@@ -479,7 +684,11 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('You must register a business profile first before adding staff accounts', 400);
     }
 
-    const { phone, password, email } = req.body;
+    const { name, phone, password, email } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new AppError('Staff name is mandatory', 400);
+    }
 
     if (!phone || !password) {
       throw new AppError('Phone and password are required', 400);
@@ -505,6 +714,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
     // Create standard Service Provider (MOBILE_SP) user
     const newUser = await prisma.user.create({
       data: {
+        name: name.trim(),
         phone,
         email: email?.trim() || null,
         password: hashedPassword,
@@ -521,6 +731,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
       message: 'Service provider user created successfully',
       data: {
         id: newUser.id,
+        name: newUser.name,
         phone: newUser.phone,
         email: newUser.email,
         role: newUser.role,
@@ -546,9 +757,11 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
       where: {
         serviceProviderId: spId,
         role: UserRole.MOBILE_SP,
+        isDeleted: false,
       },
       select: {
         id: true,
+        name: true,
         phone: true,
         email: true,
         role: true,
@@ -565,6 +778,119 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
     res.status(200).json({
       success: true,
       data: users,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update standard Service Provider user (staff) details: name, status (isActive), and optional password
+export const updateSpUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const { userId } = req.params;
+    const { name, isActive, password } = req.body;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    // Verify that this user belongs to the same service provider and has MOBILE_SP role and is not deleted
+    const staffUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+        isDeleted: false,
+      },
+    });
+
+    if (!staffUser) {
+      throw new AppError('Staff user not found or does not belong to your business', 404);
+    }
+
+    const updateData: any = {};
+
+    if (name !== undefined) {
+      if (!name.trim()) {
+        throw new AppError('Staff name cannot be empty', 400);
+      }
+      updateData.name = name.trim();
+    }
+
+    if (isActive !== undefined) {
+      updateData.isActive = Boolean(isActive);
+    }
+
+    if (password && password.trim()) {
+      if (password.trim().length < 6) {
+        throw new AppError('Password must be at least 6 characters long', 400);
+      }
+      updateData.password = await bcrypt.hash(password.trim(), 12);
+      updateData.mustChangePassword = true;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        role: true,
+        isActive: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff user updated successfully',
+      data: updatedUser,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Soft delete a standard Service Provider user (staff)
+export const deleteSpUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const { userId } = req.params;
+
+    if (!spId) {
+      throw new AppError('You must register a business profile first', 400);
+    }
+
+    const staffUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        serviceProviderId: spId,
+        role: UserRole.MOBILE_SP,
+        isDeleted: false,
+      },
+    });
+
+    if (!staffUser) {
+      throw new AppError('Staff user not found or does not belong to your business', 404);
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: false,
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff user deleted successfully',
     });
   } catch (error) {
     next(error);
@@ -592,6 +918,7 @@ export const updateSpUserPassword = async (req: AuthRequest, res: Response, next
         id: userId,
         serviceProviderId: spId,
         role: UserRole.MOBILE_SP,
+        isDeleted: false,
       },
     });
 

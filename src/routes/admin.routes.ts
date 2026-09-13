@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as adminController from '../controllers/admin.controller';
+import * as serviceController from '../controllers/service.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { superAdminOnly } from '../middlewares/role.middleware';
 
@@ -25,5 +26,8 @@ router.put('/revenue', authenticate, superAdminOnly, adminController.updateSubsc
 // Subscription Expiry Tracking & Automated Email Reminders
 router.get('/expiry', authenticate, superAdminOnly, adminController.getExpiryTracking);
 router.post('/expiry/send-reminders', authenticate, superAdminOnly, adminController.sendExpiryReminders);
+
+// Services management
+router.delete('/services/:id', authenticate, superAdminOnly, serviceController.deleteService);
 
 export default router;

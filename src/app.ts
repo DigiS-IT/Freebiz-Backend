@@ -129,6 +129,7 @@ process.on('SIGINT', async () => {
 
 if (process.env.NODE_ENV !== 'test') {
   main();
+
 }
 
 export default app;

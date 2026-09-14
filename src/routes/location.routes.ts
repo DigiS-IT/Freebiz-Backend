@@ -17,6 +17,7 @@ const INDIAN_LOCATIONS: Record<string, string[]> = {
     'Dindigul',
     'Ranipet',
     'Kanchipuram',
+    'Karur',
     'Tiruppur',
     'Nagercoil',
     'Cuddalore',

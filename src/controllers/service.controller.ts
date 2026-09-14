@@ -85,7 +85,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
     if (latitude && longitude) {
       const userLat = parseFloat(latitude as string);
       const userLng = parseFloat(longitude as string);
-      const maxDistMeters = maxDistance ? parseFloat(maxDistance as string) : 10000;
+      const maxDistMeters = maxDistance ? parseFloat(maxDistance as string) : 15000; // 15 km default
 
       if (!isNaN(userLat) && !isNaN(userLng)) {
         // Safe check and enable PostGIS extension in DB
@@ -96,7 +96,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
         }
 
         try {
-          // Pre-filter service IDs within boundary using PostGIS directly in SQL
+          // Pre-filter service IDs within 15 km boundary using PostGIS directly in SQL
           const nearbyServices = await prisma.$queryRaw<any[]>`
             SELECT s.id, 
                    ST_DistanceSphere(
@@ -119,14 +119,51 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             const distKm = s.distance / 1000.0;
             distanceMap[s.id] = {
               distance: distKm,
-              distanceText: distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`,
+              distanceText: distKm < 0.05 ? 'At your location' : (distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`),
             };
           });
 
           // Enforce raw SQL filter inside Prisma where clause
           where.id = { in: serviceIds };
-        } catch (e) {
-          console.error('PostGIS raw query failed, falling back to memory calculations:', e);
+        } catch (postgisErr) {
+          console.warn('PostGIS query failed or extension missing, attempting SQL Haversine query:', postgisErr);
+          try {
+            // Pure PostgreSQL Haversine fallback without external extension
+            const haversineNearby = await prisma.$queryRaw<any[]>`
+              SELECT s.id,
+                     (6371000 * acos(
+                       least(1.0, greatest(-1.0,
+                         cos(radians(${userLat})) * cos(radians(s.latitude)) *
+                         cos(radians(s.longitude) - radians(${userLng})) +
+                         sin(radians(${userLat})) * sin(radians(s.latitude))
+                       ))
+                     )) AS distance
+              FROM "Service" s
+              JOIN "ServiceProviderProfile" sp ON s."serviceProviderId" = sp.id
+              WHERE s."isActive" = true
+                AND sp."isDisabled" = false
+                AND (6371000 * acos(
+                       least(1.0, greatest(-1.0,
+                         cos(radians(${userLat})) * cos(radians(s.latitude)) *
+                         cos(radians(s.longitude) - radians(${userLng})) +
+                         sin(radians(${userLat})) * sin(radians(s.latitude))
+                       ))
+                     )) <= ${maxDistMeters}
+              ORDER BY distance ASC
+            `;
+
+            serviceIds = haversineNearby.map((s) => s.id);
+            haversineNearby.forEach((s) => {
+              const distKm = Number(s.distance) / 1000.0;
+              distanceMap[s.id] = {
+                distance: distKm,
+                distanceText: distKm < 0.05 ? 'At your location' : (distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`),
+              };
+            });
+            where.id = { in: serviceIds };
+          } catch (haversineErr) {
+            console.error('SQL Haversine query also failed, falling back to in-memory calculation:', haversineErr);
+          }
         }
       }
     }
@@ -202,9 +239,9 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             s.latitude,
             s.longitude
           );
-          // Only show services within 10 km
-          if (distance > 10) return null;
-          distanceText = formatDistance(distance);
+          // Only show services within 15 km
+          if (distance > 15) return null;
+          distanceText = distance < 0.05 ? 'At your location' : formatDistance(distance);
         }
 
         // Calculate available slots for today

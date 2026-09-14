@@ -4,6 +4,7 @@ export const updateProfileSchema = z.object({
   name: z.string().min(1, 'Name is required').optional(),
   age: z.number().int().min(1).max(120).optional(),
   gender: z.string().optional(),
+  profilePicture: z.string().optional().nullable(),
   address: z.string().optional(),
   city: z.string().optional(),
   state: z.string().optional(),

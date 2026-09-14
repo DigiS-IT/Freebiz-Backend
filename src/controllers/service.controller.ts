@@ -124,7 +124,13 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           });
 
           // Enforce raw SQL filter inside Prisma where clause
-          where.id = { in: serviceIds };
+          if (serviceIds.length > 0) {
+            where.id = { in: serviceIds };
+          } else if (city) {
+            where.city = { equals: city as string, mode: 'insensitive' };
+          } else {
+            where.id = { in: [] };
+          }
         } catch (postgisErr) {
           console.warn('PostGIS query failed or extension missing, attempting SQL Haversine query:', postgisErr);
           try {
@@ -160,9 +166,18 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
                 distanceText: distKm < 0.05 ? 'At your location' : (distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`),
               };
             });
-            where.id = { in: serviceIds };
+            if (serviceIds.length > 0) {
+              where.id = { in: serviceIds };
+            } else if (city) {
+              where.city = { equals: city as string, mode: 'insensitive' };
+            } else {
+              where.id = { in: [] };
+            }
           } catch (haversineErr) {
             console.error('SQL Haversine query also failed, falling back to in-memory calculation:', haversineErr);
+            if (city) {
+              where.city = { equals: city as string, mode: 'insensitive' };
+            }
           }
         }
       }
@@ -180,8 +195,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
         media: {
           where: { mediaType: 'PHOTO' },
           orderBy: { order: 'asc' },
-          take: 1,
-          select: { mediaUrl: true },
+          select: { id: true, mediaUrl: true, mediaType: true, order: true },
         },
         subServices: {
           where: { isActive: true },
@@ -189,8 +203,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             media: {
               where: { mediaType: 'PHOTO' },
               orderBy: { order: 'asc' },
-              take: 1,
-              select: { mediaUrl: true },
+              select: { id: true, mediaUrl: true, mediaType: true, order: true },
             },
           },
         },
@@ -239,9 +252,11 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             s.latitude,
             s.longitude
           );
-          // Only show services within 15 km
-          if (distance > 15) return null;
+          // Only show services within 15 km when nearbyServices explicitly matched via coordinates
+          if (serviceIds && serviceIds.length > 0 && distance > 15) return null;
           distanceText = distance < 0.05 ? 'At your location' : formatDistance(distance);
+        } else {
+          distanceText = s.city || 'Nearby';
         }
 
         // Calculate available slots for today
@@ -276,12 +291,14 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           discountTier: s.discountPercentage ? getDiscountTier(s.discountPercentage) : null,
           // Media
           thumbnailUrl: s.media[0]?.mediaUrl || null,
+          media: s.media || [],
+          images: (s.media || []).map((m: any) => m.mediaUrl).filter(Boolean),
           // Distance
           distance,
           distanceText,
-          // Availability
-          hasActiveSlot: s.slots.length > 0,
-          availableToday,
+          // Availability (default to available so newly created services are immediately visible)
+          hasActiveSlot: true,
+          availableToday: s.slots.length > 0 ? availableToday : 50,
           slotDates: s.slots.map((slot: any) => ({
             startDate: slot.startDate,
             endDate: slot.endDate,
@@ -300,10 +317,12 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
             startDate: sub.startDate,
             endDate: sub.endDate,
             thumbnailUrl: sub.media[0]?.mediaUrl || null,
+            media: sub.media || [],
+            images: (sub.media || []).map((m: any) => m.mediaUrl).filter(Boolean),
           })) : [],
         };
       })
-      .filter((s: any) => s !== null && s.hasActiveSlot);
+      .filter((s: any) => s !== null);
 
     // Sort by distance if coordinates provided
     if (latitude && longitude) {
@@ -352,6 +371,16 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
             endDate: { gte: new Date() },
           },
           orderBy: { startDate: 'asc' },
+        },
+        subServices: {
+          where: { isActive: true },
+          include: {
+            media: {
+              where: { mediaType: 'PHOTO' },
+              orderBy: { order: 'asc' },
+              select: { id: true, mediaUrl: true, mediaType: true, order: true },
+            },
+          },
         },
       },
     });
@@ -411,7 +440,25 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
         discountPercentage: service.discountPercentage,
         discountTier: service.discountPercentage ? getDiscountTier(service.discountPercentage) : null,
         media: service.media,
+        images: (service.media || []).map((m: any) => m.mediaUrl).filter(Boolean),
         availableDates,
+        subServices: (service as any).subServices ? (service as any).subServices.map((sub: any) => ({
+          id: sub.id,
+          serviceType: sub.serviceType,
+          serviceDetail: sub.serviceDetail,
+          contactNumber: sub.contactNumber,
+          address: sub.address,
+          city: sub.city,
+          latitude: sub.latitude,
+          longitude: sub.longitude,
+          startDate: sub.startDate,
+          endDate: sub.endDate,
+          specialInstructions: sub.specialInstructions,
+          termsAndConditions: sub.termsAndConditions,
+          thumbnailUrl: sub.media[0]?.mediaUrl || null,
+          media: sub.media || [],
+          images: (sub.media || []).map((m: any) => m.mediaUrl).filter(Boolean),
+        })) : [],
       },
     });
   } catch (error) {

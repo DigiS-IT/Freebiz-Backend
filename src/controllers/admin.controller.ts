@@ -9,7 +9,7 @@ import { UserRole, SubscriptionStatus } from '@prisma/client';
 // ============================================
 
 const KNOWN_STATE_CITY_MAP: Record<string, string[]> = {
-  'Tamil Nadu': ['Chennai', 'Palavakkam, Chennai', 'Maduravoyal, Chennai', 'Coimbatore', 'Madurai', 'Salem', 'Trichy', 'Tirunelveli', 'Erode', 'Vellore'],
+  'Tamil Nadu': ['Chennai', 'Palavakkam, Chennai', 'Maduravoyal, Chennai', 'Coimbatore', 'Madurai', 'Salem', 'Trichy', 'Tirunelveli', 'Erode', 'Vellore', 'Karur'],
   'Karnataka': ['Bangalore', 'Bengaluru', 'Mysore', 'Mangalore', 'Hubli'],
   'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane', 'Nashik'],
   'Telangana': ['Hyderabad', 'Warangal'],

@@ -159,7 +159,17 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
 
     if (!user) {
       user = await prisma.user.create({
-        data: { phone: verifiedPhone, role: 'CUSTOMER' },
+        data: {
+          phone: verifiedPhone,
+          role: 'CUSTOMER',
+          name: name ? name.trim() : undefined,
+        },
+        include: { customerProfile: true, serviceProvider: true },
+      });
+    } else if (name && name.trim()) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { name: name.trim() },
         include: { customerProfile: true, serviceProvider: true },
       });
     }
@@ -168,20 +178,22 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
     let customerProfile = user.customerProfile;
     
     if (user.role === 'CUSTOMER') {
+      const cleanName = name ? name.trim() : (user.name || 'User');
       if (!customerProfile) {
         customerProfile = await prisma.customerProfile.create({
           data: {
             userId: user.id,
-            name: name || 'User',
+            name: cleanName,
             age: age ? parseInt(age) : null,
             gender: gender || null,
+            isProfileComplete: Boolean(cleanName && cleanName !== 'User'),
           },
         });
       } else if (name || age || gender) {
         customerProfile = await prisma.customerProfile.update({
           where: { id: customerProfile.id },
           data: {
-            ...(name && { name }),
+            ...(name && { name: name.trim(), isProfileComplete: true }),
             ...(age && { age: parseInt(age) }),
             ...(gender && { gender }),
           },

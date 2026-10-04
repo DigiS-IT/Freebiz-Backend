@@ -251,9 +251,15 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
         OR: [
           { id: cleanUserId },
           { phone: cleanUserId },
+          ...(phoneDigitsOnly ? [{ phone: phoneDigitsOnly }, { phone: `+91${phoneDigitsOnly}` }] : []),
+          ...(phoneSuffix ? [
+            { phone: phoneSuffix },
+            { phone: `+91${phoneSuffix}` },
+            { phone: { endsWith: phoneSuffix } }
+          ] : []),
           { email: { equals: cleanUserId, mode: 'insensitive' } },
           { email: { startsWith: `${cleanUserId}@`, mode: 'insensitive' } },
-          ...(phoneSuffix ? [{ phone: { endsWith: phoneSuffix } }] : []),
+          { name: { equals: cleanUserId, mode: 'insensitive' } },
           {
             serviceProvider: {
               OR: [
@@ -306,7 +312,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!user) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('No account found for this mobile number or user ID. Please check your credentials.', 401);
     }
 
     if (user.role === 'CUSTOMER') {
@@ -324,7 +330,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!user.password) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('This account does not have a password configured. Please contact your administrator.', 401);
     }
 
     // Verify password (check raw and trimmed password)
@@ -335,7 +341,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!isPasswordValid) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('Incorrect password. Please verify your password.', 401);
     }
 
     // Generate tokens

@@ -193,7 +193,6 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           select: { businessName: true, isDisabled: true },
         },
         media: {
-          where: { mediaType: 'PHOTO' },
           orderBy: { order: 'asc' },
           select: { id: true, mediaUrl: true, mediaType: true, order: true },
         },
@@ -201,7 +200,6 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           where: { isActive: true },
           include: {
             media: {
-              where: { mediaType: 'PHOTO' },
               orderBy: { order: 'asc' },
               select: { id: true, mediaUrl: true, mediaType: true, order: true },
             },

@@ -90,10 +90,20 @@ if (process.env.NODE_ENV === 'development') {
 
 app.use(API_PREFIX, routes);
 
-// Health check endpoint
+// Health check endpoints
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+  });
+});
+
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    message: 'FreeBie API Server is running',
+    apiPrefix: API_PREFIX,
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
   });

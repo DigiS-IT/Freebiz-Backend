@@ -25,7 +25,7 @@ const app = express();
 // ============================================
 const isProduction = process.env.NODE_ENV === 'production';
 const HOST = isProduction ? '0.0.0.0' : (process.env.HOST || '0.0.0.0');
-const PORT = Number(process.env.PORT) || (isProduction ? 6000 : 3000);
+const PORT = Number(process.env.PORT) || (isProduction ? 8443 : 3000);
 const API_PREFIX = process.env.API_PREFIX || '/api/v1';
 
 // Certbot SSL certificate paths for production
@@ -41,8 +41,12 @@ const isSslEnabled = process.env.SSL_ENABLED !== undefined
 // MIDDLEWARES
 // ============================================
 
-// Security headers
-app.use(helmet());
+// Security headers - allow cross-origin requests from web frontends
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
 // CORS configuration
 const corsOptions: cors.CorsOptions = {
@@ -50,16 +54,22 @@ const corsOptions: cors.CorsOptions = {
     if (!origin) return callback(null, true);
 
     const configuredOrigins = process.env.CORS_ORIGIN
-      ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+      ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim().replace(/\/$/, ''))
       : [];
 
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    const normalizedOrigin = origin.replace(/\/$/, '');
 
-    if (configuredOrigins.includes(origin) || isLocalhost || process.env.NODE_ENV === 'development') {
+    if (
+      configuredOrigins.includes(normalizedOrigin) ||
+      configuredOrigins.includes('*') ||
+      isLocalhost ||
+      process.env.NODE_ENV === 'development'
+    ) {
       return callback(null, true);
     }
 
-    return callback(new Error('Not allowed by CORS'));
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

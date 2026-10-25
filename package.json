@@ -18,6 +18,7 @@
     "remove-default-sp": "ts-node src/scripts/remove-default-sp.ts",
     "remove-default-sp:prod": "node src/scripts/remove-default-sp.js",
     "prisma:reset": "prisma migrate reset",
+    "check:postgis": "ts-node src/scripts/check-postgis.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },

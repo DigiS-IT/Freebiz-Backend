@@ -3,6 +3,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import s3Client from '../config/aws';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
+import { getEnvironmentS3Key } from '../utils/s3-key';
 
 const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME!;
 
@@ -11,7 +12,7 @@ export const uploadToS3 = async (
   folder: string = 'uploads'
 ): Promise<string> => {
   const fileExtension = path.extname(file.originalname);
-  const fileName = `FreeBiz/${folder}/${uuidv4()}${fileExtension}`;
+  const fileName = getEnvironmentS3Key(folder, `${uuidv4()}${fileExtension}`);
 
   const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,

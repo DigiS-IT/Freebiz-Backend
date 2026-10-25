@@ -449,7 +449,8 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
   try {
     const { search } = req.query;
 
-    const whereClause: any = {};
+    // Archived providers are retained for booking history but hidden from management.
+    const whereClause: any = { users: { some: { isDeleted: false } } };
     if (search && typeof search === 'string' && search.trim()) {
       const searchStr = search.trim();
       const cleanDigits = searchStr.replace(/\D/g, '');
@@ -494,7 +495,7 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
     const providers = await prisma.serviceProviderProfile.findMany({
       where: whereClause,
       include: {
-        users: true,
+        users: { where: { isDeleted: false } },
         services: {
           where: { isDeleted: false },
           include: { slots: { where: { isDeleted: false } } },
@@ -552,6 +553,62 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
+// Permanently delete a provider only when doing so will not erase booking history.
+export const deleteProvider = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const provider = await prisma.serviceProviderProfile.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!provider) {
+      throw new AppError('Service provider not found', 404);
+    }
+
+    const bookingCount = await prisma.booking.count({
+      where: { service: { serviceProviderId: id } },
+    });
+    if (bookingCount > 0) {
+      throw new AppError(
+        `This provider has ${bookingCount} booking${bookingCount === 1 ? '' : 's'} and cannot be permanently deleted. Deactivate the provider to keep its booking history.`,
+        409,
+      );
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const providerUsers = await tx.user.findMany({
+        where: { serviceProviderId: id },
+        select: { id: true },
+      });
+      const userIds = providerUsers.map((user) => user.id);
+
+      if (userIds.length > 0) {
+        // Preserve QR scan records and staff accounts that reference these users.
+        await tx.qRCode.updateMany({
+          where: { scannedByUserId: { in: userIds } },
+          data: { scannedByUserId: null },
+        });
+        await tx.user.updateMany({
+          where: { createdByUserId: { in: userIds } },
+          data: { createdByUserId: null },
+        });
+      }
+
+      // Cascades remove the provider's users, services, slots, media, and subscriptions.
+      await tx.serviceProviderProfile.delete({ where: { id } });
+    });
+
+    res.status(200).json({ success: true, message: 'Service provider permanently deleted' });
+  } catch (error) {
+    if ((error as any)?.code === 'P2003') {
+      next(new AppError('This provider has linked records and cannot be permanently deleted. Deactivate the provider instead.', 409));
+      return;
+    }
+    next(error);
+  }
+};
+
 // Create a new SP Super Admin User (Super Service Provider)
 export const createProvider = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -568,60 +625,73 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
 
     const cleanPrimary = primaryContact ? primaryContact.toString().replace(/\D/g, '').slice(-10) : cleanPhone;
     const cleanSecondary = secondaryContact ? secondaryContact.toString().replace(/\D/g, '').slice(-10) : null;
+    const cleanEmail = businessEmail.trim().toLowerCase();
 
-    // Check if user already exists
-    const existingUser = await prisma.user.findUnique({ where: { phone: cleanPhone } });
-    if (existingUser) {
+    // Email and phone are unique login fields. Check both before starting writes
+    // so the admin sees a useful validation message instead of a database error.
+    const [existingPhoneUser, existingEmailUser] = await Promise.all([
+      prisma.user.findUnique({ where: { phone: cleanPhone }, select: { id: true } }),
+      prisma.user.findFirst({
+        where: { email: { equals: cleanEmail, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
+    if (existingPhoneUser) {
       throw new AppError('A user with this phone number already exists', 400);
+    }
+    if (existingEmailUser) {
+      throw new AppError('This email address is already in use. Please use a different email address.', 409);
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create Service Provider Profile unconditionally
-    const profile = await prisma.serviceProviderProfile.create({
-      data: {
-        businessName: businessName.trim(),
-        businessEmail: businessEmail.trim(),
-        profilePic: profilePic && typeof profilePic === 'string' ? profilePic.trim() : null,
-        primaryContact: cleanPrimary || null,
-        secondaryContact: cleanSecondary || null,
-        address: address.trim(),
-        city: city.trim(),
-        latitude: parseFloat(latitude.toString()),
-        longitude: parseFloat(longitude.toString()),
-      },
-    });
-
-    // Create User record with role SP_SUPER_ADMIN linked to the profile
-    const newUser = await prisma.user.create({
-      data: {
-        phone: cleanPhone,
-        email: businessEmail ? businessEmail.trim() : null,
-        password: hashedPassword,
-        role: UserRole.SP_SUPER_ADMIN,
-        mustChangePassword: true,
-        isActive: true,
-        serviceProviderId: profile.id,
-      },
-    });
-
-    // Create initial subscription if startDate and endDate are provided
-    if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      await prisma.subscription.create({
+    // Keep the profile, login account, and subscription consistent if any write fails.
+    const { profile, newUser } = await prisma.$transaction(async (tx) => {
+      const profile = await tx.serviceProviderProfile.create({
         data: {
-          serviceProviderId: profile.id,
-          startDate: start,
-          endDate: end,
-          status: end >= today ? SubscriptionStatus.ACTIVE : SubscriptionStatus.EXPIRED,
+          businessName: businessName.trim(),
+          businessEmail: cleanEmail,
+          profilePic: profilePic && typeof profilePic === 'string' ? profilePic.trim() : null,
+          primaryContact: cleanPrimary || null,
+          secondaryContact: cleanSecondary || null,
+          address: address.trim(),
+          city: city.trim(),
+          latitude: parseFloat(latitude.toString()),
+          longitude: parseFloat(longitude.toString()),
         },
       });
-    }
+
+      const newUser = await tx.user.create({
+        data: {
+          phone: cleanPhone,
+          email: cleanEmail,
+          password: hashedPassword,
+          role: UserRole.SP_SUPER_ADMIN,
+          mustChangePassword: true,
+          isActive: true,
+          serviceProviderId: profile.id,
+        },
+      });
+
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        await tx.subscription.create({
+          data: {
+            serviceProviderId: profile.id,
+            startDate: start,
+            endDate: end,
+            status: end >= today ? SubscriptionStatus.ACTIVE : SubscriptionStatus.EXPIRED,
+          },
+        });
+      }
+
+      return { profile, newUser };
+    });
 
     res.status(201).json({
       success: true,
@@ -635,6 +705,12 @@ export const createProvider = async (req: Request, res: Response, next: NextFunc
       },
     });
   } catch (error) {
+    // A concurrent request can pass the pre-checks and still win the unique
+    // constraint race. Convert that database error into an actionable response.
+    if ((error as any)?.code === 'P2002') {
+      next(new AppError('This email address or phone number is already in use.', 409));
+      return;
+    }
     next(error);
   }
 };

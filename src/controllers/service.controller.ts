@@ -77,7 +77,11 @@ export const getServices = async (
     }
 
     // Filter by city
-    if (city) {
+    // Radius search is based on coordinates and may legitimately include a
+    // nearby provider whose city label differs. Use city only for city-only
+    // discovery requests (where the customer has no coordinates).
+    const hasCoordinates = latitude !== undefined && longitude !== undefined;
+    if (city && !hasCoordinates) {
       where.city = { equals: city as string, mode: "insensitive" };
     }
 
@@ -100,7 +104,6 @@ export const getServices = async (
       { distance: number; distanceText: string }
     > = {};
 
-    const hasCoordinates = latitude !== undefined && longitude !== undefined;
     if (hasCoordinates) {
       const userLat = Number(latitude);
       const userLng = Number(longitude);

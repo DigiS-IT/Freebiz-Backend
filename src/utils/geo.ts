@@ -59,6 +59,8 @@ export async function findNearbyServices(
           AND s."isDeleted" = false
           AND sp."isDisabled" = false
           AND s."serviceMode" = 'IN_PERSON'
+          AND s.latitude IS NOT NULL
+          AND s.longitude IS NOT NULL
           AND (${excludeServiceProviderId ?? null}::text IS NULL OR s."serviceProviderId" <> ${excludeServiceProviderId ?? null})
           AND ST_DWithin(
                 ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326)::geography,
@@ -93,6 +95,8 @@ export async function findNearbyServices(
       AND s."isDeleted" = false
       AND sp."isDisabled" = false
       AND s."serviceMode" = 'IN_PERSON'
+      AND s.latitude IS NOT NULL
+      AND s.longitude IS NOT NULL
       AND (${excludeServiceProviderId ?? null}::text IS NULL OR s."serviceProviderId" <> ${excludeServiceProviderId ?? null})
       AND (6371000 * acos(
              least(1.0, greatest(-1.0,

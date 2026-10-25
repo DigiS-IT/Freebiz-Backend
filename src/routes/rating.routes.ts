@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as ratingController from '../controllers/rating.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/booking/:bookingId', authenticate, ratingController.getRating);
 router.post('/booking/:bookingId', authenticate, ratingController.createRating);

@@ -4,6 +4,44 @@ import { prisma } from '../lib/prisma';
 import { AppError, validateQRData } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 
+const appDateKey = (date: Date): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: process.env.APP_TIME_ZONE || 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+type ScanningUser = {
+  serviceProviderId: string | null;
+  role: string;
+  createdByUser: {
+    serviceProviderId: string | null;
+    role: string;
+    isActive: boolean;
+  } | null;
+};
+
+const getAuthorizedProviderIds = (user: ScanningUser): Set<string> => {
+  const ids = new Set<string>();
+  if (user.serviceProviderId) ids.add(user.serviceProviderId);
+
+  // Staff were created by the provider admin for that business. Use the
+  // creator's current organization link too, in case the staff link is stale.
+  if (
+    user.role === 'MOBILE_SP' &&
+    user.createdByUser?.role === 'SP_SUPER_ADMIN' &&
+    user.createdByUser.isActive &&
+    user.createdByUser.serviceProviderId
+  ) {
+    ids.add(user.createdByUser.serviceProviderId);
+  }
+  return ids;
+};
+
 // ============================================
 // SCAN AND VALIDATE QR CODE
 // ============================================
@@ -16,10 +54,20 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
     // Get SP user's service provider ID
     const spUser = await prisma.user.findUnique({
       where: { id: spUserId },
-      select: { serviceProviderId: true, role: true },
+      select: {
+        serviceProviderId: true,
+        role: true,
+        createdByUser: {
+          select: { serviceProviderId: true, role: true, isActive: true },
+        },
+      },
     });
 
-    if (!spUser?.serviceProviderId) {
+    if (!spUser) {
+      throw new AppError('Service provider not found', 404);
+    }
+    const authorizedProviderIds = getAuthorizedProviderIds(spUser);
+    if (authorizedProviderIds.size === 0) {
       throw new AppError('Service provider not found', 404);
     }
 
@@ -43,6 +91,7 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
             id: true,
             serviceProviderId: true,
             serviceType: true,
+            serviceDetail: true,
             serviceProvider: {
               select: { businessName: true },
             },
@@ -63,20 +112,40 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
       });
     }
 
-    // Validation checks
-    const today = new Date().toISOString().split('T')[0];
-
-    // Check if QR belongs to this SP's service
-    if (booking.service.serviceProviderId !== spUser.serviceProviderId) {
+    if (!booking.qrCode) {
       return res.status(200).json({
         success: false,
         valid: false,
-        message: 'QR code is not valid for this service.',
+        message: 'No active QR code is associated with this booking.',
+      });
+    }
+
+    const storedBookingDate = booking.bookingDate.toISOString().slice(0, 10);
+    if (
+      decoded.serviceId !== booking.serviceId ||
+      decoded.bookingDate !== storedBookingDate
+    ) {
+      return res.status(200).json({
+        success: false,
+        valid: false,
+        message: 'This QR code does not match the booking details.',
+      });
+    }
+
+    // Validation checks
+    const today = appDateKey(new Date());
+
+    // Check if QR belongs to this SP's service
+    if (!authorizedProviderIds.has(booking.service.serviceProviderId)) {
+      return res.status(200).json({
+        success: false,
+        valid: false,
+        message: 'This booking is not linked to the organization for your provider account. Check that you are using the correct staff login.',
       });
     }
 
     // Check booking date
-    if (booking.bookingDate.toISOString().split('T')[0] !== today) {
+    if (booking.bookingDate.toISOString().slice(0, 10) !== today) {
       return res.status(200).json({
         success: false,
         valid: false,
@@ -93,12 +162,12 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
       });
     }
 
-    // Check if cancelled or rejected
-    if (booking.status === 'CANCELLED' || booking.status === 'REJECTED') {
+    // Only active bookings can be confirmed by the service provider.
+    if (booking.status !== 'BOOKED') {
       return res.status(200).json({
         success: false,
         valid: false,
-        message: 'This booking has been cancelled or rejected.',
+        message: `This booking is ${booking.status.toLowerCase()} and cannot be confirmed.`,
       });
     }
 
@@ -111,6 +180,8 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
         bookingId: booking.id,
         bookingCode: booking.bookingCode,
         customerName: booking.customer.name,
+        serviceName: booking.service.serviceDetail,
+        bookingDate: storedBookingDate,
         serviceType: booking.service.serviceType,
         businessName: booking.service.serviceProvider.businessName,
       },
@@ -145,13 +216,31 @@ export const acceptQRCode = async (req: AuthRequest, res: Response, next: NextFu
         throw new AppError('Booking not found', 404);
       }
 
+      if (booking.status !== 'BOOKED') {
+        throw new AppError(
+          booking.status === 'USED'
+            ? 'This booking has already been confirmed.'
+            : `This booking cannot be confirmed because its status is ${booking.status}.`,
+          400,
+        );
+      }
+
       // Verify SP owns this service
       const spUser = await tx.user.findUnique({
         where: { id: spUserId },
-        select: { serviceProviderId: true },
+        select: {
+          serviceProviderId: true,
+          role: true,
+          createdByUser: {
+            select: { serviceProviderId: true, role: true, isActive: true },
+          },
+        },
       });
 
-      if (!spUser || booking.service.serviceProviderId !== spUser.serviceProviderId) {
+      if (
+        !spUser ||
+        !getAuthorizedProviderIds(spUser).has(booking.service.serviceProviderId)
+      ) {
         throw new AppError('Unauthorized action', 403);
       }
 
@@ -160,19 +249,26 @@ export const acceptQRCode = async (req: AuthRequest, res: Response, next: NextFu
         throw new AppError('This QR code has already been redeemed', 400);
       }
 
-      const today = new Date().toISOString().split('T')[0];
-      if (booking.bookingDate.toISOString().split('T')[0] !== today) {
+      const today = appDateKey(new Date());
+      if (booking.bookingDate.toISOString().slice(0, 10) !== today) {
         throw new AppError('QR code expired', 400);
       }
 
-      // Update booking status
-      const updatedBooking = await tx.booking.update({
-        where: { id: bookingId },
+      if (!booking.qrCode) {
+        throw new AppError('QR code record not found for this booking', 400);
+      }
+
+      // Conditional update prevents two concurrent scans from redeeming twice.
+      const updatedBooking = await tx.booking.updateMany({
+        where: { id: bookingId, status: 'BOOKED' },
         data: {
           status: 'USED',
           usedAt: new Date(),
         },
       });
+      if (updatedBooking.count !== 1) {
+        throw new AppError('This booking has already been confirmed.', 400);
+      }
 
       // Update QR code
       await tx.qRCode.update({
@@ -184,12 +280,12 @@ export const acceptQRCode = async (req: AuthRequest, res: Response, next: NextFu
         },
       });
 
-      return updatedBooking;
+      return { id: bookingId };
     });
 
     res.status(200).json({
       success: true,
-      message: 'QR code accepted. Service marked as used.',
+      message: 'Customer confirmed. Booking marked as used.',
       data: { bookingId: result.id },
     });
   } catch (error) {

@@ -7,7 +7,7 @@ dns.setDefaultResultOrder('ipv4first');
 import http from 'http';
 import https from 'https';
 import fs from 'fs';
-import express from 'express';
+import express, { type Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -18,7 +18,7 @@ import { setupExpiredBookingsJob } from './utils/cron-jobs';
 import { prisma } from './lib/prisma';
 import './services/firebase.service'; // Initialize Firebase
 
-const app = express();
+const app: Express = express();
 
 // ============================================
 // ENVIRONMENT & SERVER CONFIGURATION

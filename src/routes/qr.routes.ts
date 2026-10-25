@@ -5,7 +5,7 @@ import { spOnly } from '../middlewares/role.middleware';
 import { validateRequest } from '../middlewares/validate.middleware';
 import { scanQRSchema, acceptQRSchema, rejectQRSchema } from '../validators/booking.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.post('/validate', authenticate, spOnly, validateRequest(scanQRSchema), qrController.scanQRCode);
 router.post('/use', authenticate, spOnly, validateRequest(acceptQRSchema), qrController.acceptQRCode);

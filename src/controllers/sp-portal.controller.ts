@@ -326,15 +326,13 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
         },
         services: {
           where: { isDeleted: false },
-          include: {
-            slots: { where: { isDeleted: false } },
-            bookings: {
-              include: {
-                rating: true,
-                customer: true
-              }
-            }
-          }
+          select: {
+            id: true,
+            serviceDetail: true,
+            serviceType: true,
+            contactNumber: true,
+            isActive: true,
+          },
         },
         subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 }
       }
@@ -350,15 +348,16 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       where: { service: { serviceProviderId: spId } }
     });
 
-    // Calculate average rating
-    const reviews = await prisma.rating.findMany({
+    // Aggregate ratings in the database instead of loading every review row.
+    const reviews = await prisma.rating.aggregate({
       where: { booking: { service: { serviceProviderId: spId } } },
-      select: { stars: true }
+      _avg: { stars: true },
+      _count: { stars: true },
     });
 
-    const totalReviews = reviews.length;
+    const totalReviews = reviews._count.stars;
     const avgRating = totalReviews > 0
-      ? Math.round((reviews.reduce((sum, r) => sum + r.stars, 0) / totalReviews) * 10) / 10
+      ? Math.round((reviews._avg.stars || 0) * 10) / 10
       : 0;
 
     const activeSub = provider.subscriptions?.[0] || null;

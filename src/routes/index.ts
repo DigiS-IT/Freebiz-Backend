@@ -11,7 +11,7 @@ import uploadRoutes from './upload.routes';
 import locationRoutes from './location.routes';
 import systemRoutes from './system.routes';
 
-const router = Router();
+const router: Router = Router();
 
 // System routes (handshake, ping, connectivity confirmation)
 router.use('/system', systemRoutes);

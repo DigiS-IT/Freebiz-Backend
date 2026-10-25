@@ -5,7 +5,7 @@ import { customerOnly } from '../middlewares/role.middleware';
 import { validateRequest } from '../middlewares/validate.middleware';
 import { createBookingSchema, cancelBookingSchema } from '../validators/booking.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.post('/', authenticate, customerOnly, validateRequest(createBookingSchema), bookingController.createBooking);
 router.get('/my', authenticate, customerOnly, bookingController.getMyBookings);

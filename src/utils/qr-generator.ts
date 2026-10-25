@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import s3Client from '../config/aws';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { getEnvironmentS3Key } from './s3-key';
 
 const UPLOAD_PATH = process.env.UPLOAD_PATH || './uploads';
 const QR_PATH = path.join(UPLOAD_PATH, 'qrcodes');
@@ -60,7 +61,7 @@ export const generateQRCode = async (
 
     // If AWS is configured, upload to S3
     if (BUCKET_NAME && process.env.AWS_ACCESS_KEY_ID) {
-      const key = `qrcodes/${filename}.png`;
+      const key = getEnvironmentS3Key('qrcodes', `${filename}.png`);
       await s3Client.send(new PutObjectCommand({
         Bucket: BUCKET_NAME,
         Key: key,

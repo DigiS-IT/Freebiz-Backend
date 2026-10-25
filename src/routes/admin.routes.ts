@@ -4,7 +4,7 @@ import * as serviceController from '../controllers/service.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { superAdminOnly } from '../middlewares/role.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 // Dashboard analytics
 router.get('/dashboard', authenticate, superAdminOnly, adminController.getDashboard);
@@ -14,6 +14,7 @@ router.get('/demographics', authenticate, superAdminOnly, adminController.getDem
 router.get('/providers', authenticate, superAdminOnly, adminController.getProviders);
 router.post('/providers', authenticate, superAdminOnly, adminController.createProvider);
 router.put('/providers', authenticate, superAdminOnly, adminController.updateProvider);
+router.delete('/providers/:id', authenticate, superAdminOnly, adminController.deleteProvider);
 
 // Customers management
 router.get('/customers', authenticate, superAdminOnly, adminController.getCustomers);

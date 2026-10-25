@@ -319,6 +319,11 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
     const provider = await prisma.serviceProviderProfile.findUnique({
       where: { id: spId },
       include: {
+        users: {
+          where: { isDeleted: false },
+          select: { phone: true },
+          take: 1,
+        },
         services: {
           where: { isDeleted: false },
           include: {
@@ -384,12 +389,28 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
       },
     };
 
+    // Older profiles may have their primary phone on the login user or an
+    // existing service instead of ServiceProviderProfile.primaryContact.
+    const primaryContact =
+      provider.primaryContact || provider.users[0]?.phone || provider.services[0]?.contactNumber || null;
+    const currentAccount = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { profilePic: true },
+    });
+
     res.status(200).json({
       success: true,
       data: {
         id: provider.id,
         businessName: provider.businessName,
+        primaryContact,
+        secondaryContact: provider.secondaryContact,
+        address: provider.address,
+        city: provider.city,
+        latitude: provider.latitude,
+        longitude: provider.longitude,
         profilePic: provider.profilePic || null,
+        accountProfilePic: currentAccount?.profilePic || null,
         isDisabled: provider.isDisabled,
         registeredOn: provider.createdAt.toISOString(),
         serviceCount,
@@ -684,7 +705,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('You must register a business profile first before adding staff accounts', 400);
     }
 
-    const { name, phone, password, email } = req.body;
+    const { name, phone, password, email, profilePic } = req.body;
 
     if (!name || !name.trim()) {
       throw new AppError('Staff name is mandatory', 400);
@@ -717,6 +738,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
         name: name.trim(),
         phone,
         email: email?.trim() || null,
+        profilePic: profilePic?.trim() || null,
         password: hashedPassword,
         role: UserRole.MOBILE_SP,
         serviceProviderId: spId,
@@ -734,6 +756,7 @@ export const createSpUser = async (req: AuthRequest, res: Response, next: NextFu
         name: newUser.name,
         phone: newUser.phone,
         email: newUser.email,
+        profilePic: newUser.profilePic,
         role: newUser.role,
         serviceProviderId: newUser.serviceProviderId,
         mustChangePassword: newUser.mustChangePassword,
@@ -764,6 +787,7 @@ export const getSpUsers = async (req: AuthRequest, res: Response, next: NextFunc
         name: true,
         phone: true,
         email: true,
+        profilePic: true,
         role: true,
         isActive: true,
         mustChangePassword: true,
@@ -789,7 +813,7 @@ export const updateSpUser = async (req: AuthRequest, res: Response, next: NextFu
   try {
     const spId = req.user!.serviceProviderId;
     const { userId } = req.params;
-    const { name, isActive, password } = req.body;
+    const { name, isActive, password, profilePic } = req.body;
 
     if (!spId) {
       throw new AppError('You must register a business profile first', 400);
@@ -821,6 +845,9 @@ export const updateSpUser = async (req: AuthRequest, res: Response, next: NextFu
     if (isActive !== undefined) {
       updateData.isActive = Boolean(isActive);
     }
+    if (profilePic !== undefined) {
+      updateData.profilePic = profilePic && typeof profilePic === 'string' ? profilePic.trim() : null;
+    }
 
     if (password && password.trim()) {
       if (password.trim().length < 6) {
@@ -838,6 +865,7 @@ export const updateSpUser = async (req: AuthRequest, res: Response, next: NextFu
         name: true,
         phone: true,
         email: true,
+        profilePic: true,
         role: true,
         isActive: true,
         mustChangePassword: true,

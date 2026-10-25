@@ -2,6 +2,7 @@ import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client, BUCKET_NAME } from '../config/s3';
 import { v4 as uuidv4 } from 'uuid';
+import { getEnvironmentS3Key } from './s3-key';
 
 export const uploadFileToS3 = async (
   file: Buffer,
@@ -10,7 +11,7 @@ export const uploadFileToS3 = async (
   fileName?: string
 ): Promise<string> => {
   const name = fileName || `${uuidv4()}`;
-  const key = `${folder}/${name}`;
+  const key = getEnvironmentS3Key(folder, name);
 
   const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,

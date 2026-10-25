@@ -371,7 +371,12 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       data: {
         user: {
           id: user.id,
+          name: user.name || (user.role === 'SUPER_ADMIN'
+            ? user.superAdminProfile?.name
+            : user.serviceProvider?.businessName) || '',
           phone: user.phone,
+          email: user.email,
+          profilePic: user.profilePic,
           role: user.role,
           mustChangePassword: user.mustChangePassword,
           ...profileData,
@@ -516,12 +521,51 @@ export const getCurrentUser = async (req: AuthRequest, res: Response, next: Next
       success: true,
       data: {
         id: user.id,
+        name: user.name || user.serviceProvider?.businessName || user.superAdminProfile?.name || '',
         phone: user.phone,
+        email: user.email,
+        profilePic: user.profilePic,
         role: user.role,
         mustChangePassword: user.mustChangePassword,
         profile,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Let a signed-in user edit their own account details and avatar only.
+export const updateCurrentUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { name, profilePic } = req.body;
+    const data: { name?: string; profilePic?: string | null } = {};
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        throw new AppError('Name cannot be empty', 400);
+      }
+      data.name = name.trim();
+    }
+
+    if (profilePic !== undefined) {
+      if (profilePic !== null && (typeof profilePic !== 'string' || !/^https:\/\//i.test(profilePic))) {
+        throw new AppError('Profile image must be a valid HTTPS URL', 400);
+      }
+      data.profilePic = profilePic;
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new AppError('No profile changes were provided', 400);
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.user!.id },
+      data,
+      select: { id: true, name: true, phone: true, email: true, profilePic: true, role: true },
+    });
+
+    res.status(200).json({ success: true, data: user });
   } catch (error) {
     next(error);
   }

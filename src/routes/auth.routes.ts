@@ -4,7 +4,7 @@ import { validateRequest } from '../middlewares/validate.middleware';
 import { sendOtpSchema, verifyOtpSchema, loginSchema, changePasswordSchema, magicLoginSchema, magicVerifySchema } from '../validators/auth.validator';
 import { authenticate } from '../middlewares/auth.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 // Customer OTP Login
 router.post('/customer/send-otp', validateRequest(sendOtpSchema), authController.sendOtp);
@@ -21,6 +21,7 @@ router.post('/refresh-token', authController.refreshToken);
 
 // Get current user profile
 router.get('/me', authenticate, authController.getCurrentUser);
+router.put('/me', authenticate, authController.updateCurrentUser);
 
 // Logout
 router.post('/logout', authenticate, authController.logout);

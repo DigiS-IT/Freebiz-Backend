@@ -1,37 +1,56 @@
-import { Router } from 'express';
-import * as serviceController from '../controllers/service.controller';
-import { validateRequest } from '../middlewares/validate.middleware';
-import { authenticate } from '../middlewares/auth.middleware';
-import { spOnly, spOrSuperAdmin } from '../middlewares/role.middleware';
-import { getServicesSchema, createServiceSchema, updateServiceSchema } from '../validators/service.validator';
+import { Router } from "express";
+import * as serviceController from "../controllers/service.controller";
+import { validateRequest } from "../middlewares/validate.middleware";
+import { authenticate } from "../middlewares/auth.middleware";
+import { spOnly, spOrSuperAdmin } from "../middlewares/role.middleware";
+import {
+  getServicesSchema,
+  createServiceSchema,
+  updateServiceSchema,
+} from "../validators/service.validator";
 
 const router: Router = Router();
 
-router.get('/', validateRequest(getServicesSchema), serviceController.getServices);
-router.get('/home/categories', validateRequest(getServicesSchema), serviceController.getHomeCategories);
-router.get('/:id', serviceController.getServiceById);
+router.get(
+  "/nearby",
+  authenticate,
+  spOnly,
+  validateRequest(getServicesSchema),
+  serviceController.getNearbyServicesForProvider,
+);
+router.get(
+  "/",
+  validateRequest(getServicesSchema),
+  serviceController.getServices,
+);
+router.get(
+  "/home/categories",
+  validateRequest(getServicesSchema),
+  serviceController.getHomeCategories,
+);
+router.get("/:id", serviceController.getServiceById);
 
 router.post(
-  '/',
+  "/",
   authenticate,
   spOnly,
   validateRequest(createServiceSchema),
-  serviceController.createService
+  serviceController.createService,
 );
 
 router.put(
-  '/:id',
+  "/:id",
   authenticate,
   spOnly,
   validateRequest(updateServiceSchema),
-  serviceController.updateService
+  serviceController.updateService,
 );
 
 router.delete(
-  '/:id',
+  "/:id",
   authenticate,
   spOrSuperAdmin,
-  serviceController.deleteService
+  serviceController.deleteService,
 );
 
 export default router;

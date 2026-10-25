@@ -1,10 +1,11 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export const getServicesSchema = z.object({
-  serviceType: z.enum(['FREE', 'DISCOUNTED']).optional(),
+  serviceType: z.enum(["FREE", "DISCOUNTED"]).optional(),
   city: z.string().optional(),
   latitude: z.string().optional(),
   longitude: z.string().optional(),
+  maxDistance: z.string().optional(),
   minDiscount: z.string().optional(),
   search: z.string().optional(),
   page: z.string().optional(),
@@ -12,57 +13,72 @@ export const getServicesSchema = z.object({
 });
 
 export const createServiceSchema = z.object({
-  serviceType: z.enum(['FREE', 'DISCOUNTED']),
+  serviceType: z.enum(["FREE", "DISCOUNTED"]),
   serviceDetail: z.string().min(10),
   contactNumber: z.string(),
   address: z.string(),
   city: z.string(),
   latitude: z.number(),
   longitude: z.number(),
-  specialInstructions: z.string({ required_error: 'Special instructions are mandatory' }).min(1, 'Special instructions are mandatory'),
-  termsAndConditions: z.string({ required_error: 'Terms and conditions are mandatory' }).min(1, 'Terms and conditions are mandatory'),
+  specialInstructions: z
+    .string({ required_error: "Special instructions are mandatory" })
+    .min(1, "Special instructions are mandatory"),
+  termsAndConditions: z
+    .string({ required_error: "Terms and conditions are mandatory" })
+    .min(1, "Terms and conditions are mandatory"),
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),
   parentId: z.string().uuid().optional().nullable(),
   startDate: z.string().optional().nullable(),
   endDate: z.string().optional().nullable(),
-  media: z.array(
-    z.object({
-      mediaType: z.enum(['PHOTO', 'VIDEO']),
-      mediaUrl: z.string(),
-      thumbnailUrl: z.string().optional().nullable(),
-      order: z.number().optional(),
-    })
-  ).refine(
-    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
-    { message: 'At least 3 photos are mandatory' }
-  ),
+  media: z
+    .array(
+      z.object({
+        mediaType: z.enum(["PHOTO", "VIDEO"]),
+        mediaUrl: z.string(),
+        thumbnailUrl: z.string().optional().nullable(),
+        order: z.number().optional(),
+      }),
+    )
+    .refine(
+      (items) => items.filter((m) => m.mediaType === "PHOTO").length >= 3,
+      { message: "At least 3 photos are mandatory" },
+    ),
 });
 
 export const updateServiceSchema = z.object({
-  serviceType: z.enum(['FREE', 'DISCOUNTED']).optional(),
+  serviceType: z.enum(["FREE", "DISCOUNTED"]).optional(),
   serviceDetail: z.string().min(10).optional(),
   contactNumber: z.string().optional(),
   address: z.string().optional(),
   city: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
-  specialInstructions: z.string().min(1, 'Special instructions cannot be empty').optional(),
-  termsAndConditions: z.string().min(1, 'Terms and conditions cannot be empty').optional(),
+  specialInstructions: z
+    .string()
+    .min(1, "Special instructions cannot be empty")
+    .optional(),
+  termsAndConditions: z
+    .string()
+    .min(1, "Terms and conditions cannot be empty")
+    .optional(),
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),
   parentId: z.string().uuid().optional().nullable(),
   startDate: z.string().optional().nullable(),
   endDate: z.string().optional().nullable(),
-  media: z.array(
-    z.object({
-      mediaType: z.enum(['PHOTO', 'VIDEO']),
-      mediaUrl: z.string(),
-      thumbnailUrl: z.string().optional().nullable(),
-      order: z.number().optional(),
-    })
-  ).refine(
-    (items) => items.filter((m) => m.mediaType === 'PHOTO').length >= 3,
-    { message: 'At least 3 photos are mandatory' }
-  ).optional(),
+  media: z
+    .array(
+      z.object({
+        mediaType: z.enum(["PHOTO", "VIDEO"]),
+        mediaUrl: z.string(),
+        thumbnailUrl: z.string().optional().nullable(),
+        order: z.number().optional(),
+      }),
+    )
+    .refine(
+      (items) => items.filter((m) => m.mediaType === "PHOTO").length >= 3,
+      { message: "At least 3 photos are mandatory" },
+    )
+    .optional(),
 });

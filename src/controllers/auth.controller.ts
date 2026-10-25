@@ -15,7 +15,8 @@ import { sendMail } from '../utils/mail';
 
 export const sendOtp = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone } = req.body;
+    const { phone, role } = req.body;
+    const requestedRole = (role || 'CUSTOMER').toString().toUpperCase();
     
     // Normalize to last 10 digits for database consistency
     const normalizedPhone = phone.length >= 10 ? phone.substring(phone.length - 10) : phone;
@@ -31,17 +32,26 @@ export const sendOtp = async (req: Request, res: Response, next: NextFunction) =
     const otp = isMock ? '123456' : generateOtp();
     const expiresAt = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '5') * 60 * 1000);
 
-    // Find or create user
+    // Find or create user depending on role
     let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
 
-    if (!user) {
-      user = await prisma.user.create({
-        data: { phone: normalizedPhone, role: 'CUSTOMER' },
-      });
-    }
-
-    if (user.role !== 'CUSTOMER') {
-      throw new AppError('This phone number is registered as a Service Provider. Please use SP login.', 400);
+    if (requestedRole === 'SERVICE_PROVIDER' || requestedRole === 'SP' || requestedRole === 'MOBILE_SP') {
+      if (!user) {
+        throw new AppError('No Service Provider account found with this phone number. Please register with your administrator.', 404);
+      }
+      if (user.role === 'CUSTOMER') {
+        throw new AppError('This account is registered as a Customer. Please choose Customer login.', 400);
+      }
+    } else {
+      // Customer login
+      if (!user) {
+        user = await prisma.user.create({
+          data: { phone: normalizedPhone, role: 'CUSTOMER' },
+        });
+      }
+      if (user.role !== 'CUSTOMER') {
+        throw new AppError('This phone number is registered as a Service Provider. Please choose Service Provider login.', 400);
+      }
     }
 
     // Invalidate previous OTPs
@@ -144,37 +154,51 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
     // Get or create user
     let user = await prisma.user.findUnique({
       where: { phone: verifiedPhone },
-      include: { customerProfile: true },
+      include: { customerProfile: true, serviceProvider: true },
     });
 
     if (!user) {
       user = await prisma.user.create({
-        data: { phone: verifiedPhone, role: 'CUSTOMER' },
-        include: { customerProfile: true },
+        data: {
+          phone: verifiedPhone,
+          role: 'CUSTOMER',
+          name: name ? name.trim() : undefined,
+        },
+        include: { customerProfile: true, serviceProvider: true },
+      });
+    } else if (name && name.trim()) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { name: name.trim() },
+        include: { customerProfile: true, serviceProvider: true },
       });
     }
 
-    // Create or update customer profile
+    // Create or update customer profile if customer
     let customerProfile = user.customerProfile;
     
-    if (!customerProfile) {
-      customerProfile = await prisma.customerProfile.create({
-        data: {
-          userId: user.id,
-          name: name || 'User',
-          age: age ? parseInt(age) : null,
-          gender: gender || null,
-        },
-      });
-    } else if (name || age || gender) {
-      customerProfile = await prisma.customerProfile.update({
-        where: { id: customerProfile.id },
-        data: {
-          ...(name && { name }),
-          ...(age && { age: parseInt(age) }),
-          ...(gender && { gender }),
-        },
-      });
+    if (user.role === 'CUSTOMER') {
+      const cleanName = name ? name.trim() : (user.name || 'User');
+      if (!customerProfile) {
+        customerProfile = await prisma.customerProfile.create({
+          data: {
+            userId: user.id,
+            name: cleanName,
+            age: age ? parseInt(age) : null,
+            gender: gender || null,
+            isProfileComplete: Boolean(cleanName && cleanName !== 'User'),
+          },
+        });
+      } else if (name || age || gender) {
+        customerProfile = await prisma.customerProfile.update({
+          where: { id: customerProfile.id },
+          data: {
+            ...(name && { name: name.trim(), isProfileComplete: true }),
+            ...(age && { age: parseInt(age) }),
+            ...(gender && { gender }),
+          },
+        });
+      }
     }
 
     // Generate JWT tokens
@@ -195,6 +219,7 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
           phone: user.phone,
           role: user.role,
           profile: customerProfile,
+          serviceProvider: user.serviceProvider,
         },
         ...tokens,
       },
@@ -226,9 +251,15 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
         OR: [
           { id: cleanUserId },
           { phone: cleanUserId },
+          ...(phoneDigitsOnly ? [{ phone: phoneDigitsOnly }, { phone: `+91${phoneDigitsOnly}` }] : []),
+          ...(phoneSuffix ? [
+            { phone: phoneSuffix },
+            { phone: `+91${phoneSuffix}` },
+            { phone: { endsWith: phoneSuffix } }
+          ] : []),
           { email: { equals: cleanUserId, mode: 'insensitive' } },
           { email: { startsWith: `${cleanUserId}@`, mode: 'insensitive' } },
-          ...(phoneSuffix ? [{ phone: { endsWith: phoneSuffix } }] : []),
+          { name: { equals: cleanUserId, mode: 'insensitive' } },
           {
             serviceProvider: {
               OR: [
@@ -281,7 +312,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!user) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('No account found for this mobile number or user ID. Please check your credentials.', 401);
     }
 
     if (user.role === 'CUSTOMER') {
@@ -299,7 +330,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!user.password) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('This account does not have a password configured. Please contact your administrator.', 401);
     }
 
     // Verify password (check raw and trimmed password)
@@ -310,7 +341,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     if (!isPasswordValid) {
-      throw new AppError('Invalid credentials', 401);
+      throw new AppError('Incorrect password. Please verify your password.', 401);
     }
 
     // Generate tokens

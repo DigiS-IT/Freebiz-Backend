@@ -9,8 +9,12 @@ import spPortalRoutes from './sp-portal.routes';
 import adminRoutes from './admin.routes';
 import uploadRoutes from './upload.routes';
 import locationRoutes from './location.routes';
+import systemRoutes from './system.routes';
 
 const router = Router();
+
+// System routes (handshake, ping, connectivity confirmation)
+router.use('/system', systemRoutes);
 
 // API Root info endpoint
 router.get('/', (req, res) => {

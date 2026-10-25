@@ -9,11 +9,11 @@ const prisma = new PrismaClient();
 async function createSuperAdmin() {
   const args = process.argv.slice(2);
 
-  // Defaults: jayasimmacse / Admin@123
+  // Defaults: jayasimmacse@gmail.com / 12345678
   // Can be customized via CLI args: [username] [password] [email] [name]
   // or via ENV: ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_EMAIL, ADMIN_NAME
-  const username = args[0] || process.env.ADMIN_USERNAME || process.env.ADMIN_PHONE || 'jayasimmacse';
-  const rawPassword = args[1] || process.env.ADMIN_PASSWORD || 'Admin@123';
+  const username = args[0] || process.env.ADMIN_USERNAME || process.env.ADMIN_PHONE || 'jayasimmacse@gmail.com';
+  const rawPassword = args[1] || process.env.ADMIN_PASSWORD || '12345678';
   const email = args[2] || process.env.ADMIN_EMAIL || 'jayasimmacse@gmail.com';
   const name = args[3] || process.env.ADMIN_NAME || 'Jayasimma Super Admin';
 

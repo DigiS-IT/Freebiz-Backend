@@ -7,6 +7,7 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/app.js",
+    "start:pm2": "pm2 start ecosystem.config.js --env production",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
@@ -17,6 +18,7 @@
     "remove-default-sp": "ts-node src/scripts/remove-default-sp.ts",
     "remove-default-sp:prod": "node src/scripts/remove-default-sp.js",
     "prisma:reset": "prisma migrate reset",
+    "check:postgis": "ts-node src/scripts/check-postgis.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },

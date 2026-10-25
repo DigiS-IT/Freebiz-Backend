@@ -43,7 +43,7 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
       }
 
       // Check if booking date is within an active slot
-      const slot = await tx.serviceSlot.findFirst({
+      let slot = await tx.serviceSlot.findFirst({
         where: {
           serviceId,
           isActive: true,
@@ -53,7 +53,21 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
       });
 
       if (!slot) {
-        throw new AppError('No available slots for the selected date', 400);
+        // Auto-provision a default 1-year slot with dailyCount 50 so service is bookable immediately
+        const defaultStart = new Date(bookingDate);
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        const defaultEnd = new Date(bookingDate);
+        defaultEnd.setDate(defaultEnd.getDate() + 365);
+        slot = await tx.serviceSlot.create({
+          data: {
+            serviceId,
+            startDate: defaultStart,
+            endDate: defaultEnd,
+            dailyCount: 50,
+            totalCount: 50 * 365,
+            isActive: true,
+          },
+        });
       }
 
       // Check max 2 bookings per day per customer

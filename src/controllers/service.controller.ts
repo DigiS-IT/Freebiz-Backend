@@ -1,15 +1,26 @@
-import { Request, Response, NextFunction } from 'express';
-import { prisma } from '../lib/prisma';
-import { AppError, calculateDistance, formatDistance, getDiscountTier, paginate } from '../utils/helpers';
-import { AuthRequest } from '../middlewares/auth.middleware';
+import { Request, Response, NextFunction } from "express";
+import { prisma } from "../lib/prisma";
+import {
+  AppError,
+  calculateDistance,
+  formatDistance,
+  getDiscountTier,
+  paginate,
+} from "../utils/helpers";
+import { AuthRequest } from "../middlewares/auth.middleware";
+import { findNearbyServices } from "../utils/geo";
 
 // ============================================
 // GET SERVICES FOR CUSTOMER (With Location)
 // ============================================
 
-export const getServices = async (req: Request, res: Response, next: NextFunction) => {
+export const getServices = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
-      const {
+    const {
       serviceType,
       minDiscount,
       maxDiscount,
@@ -18,41 +29,41 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
       latitude,
       longitude,
       search,
-      page = '1',
-      limit = '20',
+      page = "1",
+      limit = "20",
     } = req.query;
 
     // Build where clause
     const where: any = {
       isActive: true,
       isDeleted: false,
-      serviceMode: 'IN_PERSON',
+      serviceMode: "IN_PERSON",
     };
+    const excludedProviderId = (
+      req as Request & { excludeServiceProviderId?: string }
+    ).excludeServiceProviderId;
+    if (excludedProviderId) {
+      where.serviceProviderId = { not: excludedProviderId };
+    }
 
     // Filter out expired services and those not started yet
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split("T")[0];
     const todayDate = new Date(todayStr);
     where.AND = [
       {
-        OR: [
-          { endDate: null },
-          { endDate: { gte: todayDate } }
-        ]
+        OR: [{ endDate: null }, { endDate: { gte: todayDate } }],
       },
       {
-        OR: [
-          { startDate: null },
-          { startDate: { lte: todayDate } }
-        ]
-      }
+        OR: [{ startDate: null }, { startDate: { lte: todayDate } }],
+      },
     ];
 
     // Filter by service type
-    if (serviceType === 'FREE') {
-      where.serviceType = 'FREE';
-    } else if (serviceType === 'DISCOUNTED') {
-      where.serviceType = 'DISCOUNTED';
-      
+    if (serviceType === "FREE") {
+      where.serviceType = "FREE";
+    } else if (serviceType === "DISCOUNTED") {
+      where.serviceType = "DISCOUNTED";
+
       // Filter by discount percentage range
       if (minDiscount !== undefined || maxDiscount !== undefined) {
         where.discountPercentage = {};
@@ -67,71 +78,83 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
 
     // Filter by city
     if (city) {
-      where.city = { equals: city as string, mode: 'insensitive' };
+      where.city = { equals: city as string, mode: "insensitive" };
     }
 
     // Search by SP name or location
     if (search) {
       where.OR = [
-        { serviceProvider: { businessName: { contains: search as string, mode: 'insensitive' } } },
-        { address: { contains: search as string, mode: 'insensitive' } },
-        { city: { contains: search as string, mode: 'insensitive' } },
+        {
+          serviceProvider: {
+            businessName: { contains: search as string, mode: "insensitive" },
+          },
+        },
+        { address: { contains: search as string, mode: "insensitive" } },
+        { city: { contains: search as string, mode: "insensitive" } },
       ];
     }
 
     let serviceIds: string[] | null = null;
-    let distanceMap: Record<string, { distance: number; distanceText: string }> = {};
+    let distanceMap: Record<
+      string,
+      { distance: number; distanceText: string }
+    > = {};
 
-    if (latitude && longitude) {
-      const userLat = parseFloat(latitude as string);
-      const userLng = parseFloat(longitude as string);
-      const maxDistMeters = maxDistance ? parseFloat(maxDistance as string) : 10000;
-
-      if (!isNaN(userLat) && !isNaN(userLng)) {
-        // Safe check and enable PostGIS extension in DB
-        try {
-          await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS postgis;');
-        } catch (e) {
-          console.error('PostGIS extension check failed:', e);
-        }
-
-        try {
-          // Pre-filter service IDs within boundary using PostGIS directly in SQL
-          const nearbyServices = await prisma.$queryRaw<any[]>`
-            SELECT s.id, 
-                   ST_DistanceSphere(
-                     ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326),
-                     ST_SetSRID(ST_MakePoint(${userLng}, ${userLat}), 4326)
-                   ) AS distance
-            FROM "Service" s
-            JOIN "ServiceProviderProfile" sp ON s."serviceProviderId" = sp.id
-            WHERE s."isActive" = true 
-              AND sp."isDisabled" = false
-              AND ST_DistanceSphere(
-                    ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326),
-                    ST_SetSRID(ST_MakePoint(${userLng}, ${userLat}), 4326)
-                  ) <= ${maxDistMeters}
-            ORDER BY distance ASC
-          `;
-
-          serviceIds = nearbyServices.map((s) => s.id);
-          nearbyServices.forEach((s) => {
-            const distKm = s.distance / 1000.0;
-            distanceMap[s.id] = {
-              distance: distKm,
-              distanceText: distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`,
-            };
-          });
-
-          // Enforce raw SQL filter inside Prisma where clause
-          where.id = { in: serviceIds };
-        } catch (e) {
-          console.error('PostGIS raw query failed, falling back to memory calculations:', e);
-        }
+    const hasCoordinates = latitude !== undefined && longitude !== undefined;
+    if (hasCoordinates) {
+      const userLat = Number(latitude);
+      const userLng = Number(longitude);
+      if (
+        !Number.isFinite(userLat) ||
+        !Number.isFinite(userLng) ||
+        userLat < -90 ||
+        userLat > 90 ||
+        userLng < -180 ||
+        userLng > 180
+      ) {
+        throw new AppError(
+          "A valid latitude and longitude are required for nearby services",
+          400,
+        );
       }
+
+      const requestedDistance =
+        maxDistance === undefined ? 5000 : Number(maxDistance);
+      if (!Number.isFinite(requestedDistance) || requestedDistance <= 0) {
+        throw new AppError(
+          "maxDistance must be a positive number of meters",
+          400,
+        );
+      }
+      const maxDistMeters = Math.min(requestedDistance, 5000);
+      const nearby = await findNearbyServices(
+        userLat,
+        userLng,
+        maxDistMeters,
+        excludedProviderId,
+      );
+
+      serviceIds = nearby.services.map((service) => service.id);
+      nearby.services.forEach((service) => {
+        const distanceKm = Number(service.distance) / 1000;
+        distanceMap[service.id] = {
+          distance: distanceKm,
+          distanceText:
+            distanceKm < 0.05
+              ? "At your location"
+              : distanceKm < 1
+                ? `${Math.round(distanceKm * 1000)} m`
+                : `${distanceKm.toFixed(1)} km`,
+        };
+      });
+      // An empty nearby result must stay empty; never broaden it to city-wide.
+      where.id = { in: serviceIds };
     }
 
-    const { skip, take } = paginate(parseInt(page as string), parseInt(limit as string));
+    const { skip, take } = paginate(
+      parseInt(page as string),
+      parseInt(limit as string),
+    );
 
     // Get services with slot info
     const services = await prisma.service.findMany({
@@ -141,19 +164,20 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           select: { businessName: true, isDisabled: true },
         },
         media: {
-          where: { mediaType: 'PHOTO' },
-          orderBy: { order: 'asc' },
-          take: 1,
-          select: { mediaUrl: true },
+          orderBy: { order: "asc" },
+          select: { id: true, mediaUrl: true, mediaType: true, order: true },
         },
         subServices: {
           where: { isActive: true },
           include: {
             media: {
-              where: { mediaType: 'PHOTO' },
-              orderBy: { order: 'asc' },
-              take: 1,
-              select: { mediaUrl: true },
+              orderBy: { order: "asc" },
+              select: {
+                id: true,
+                mediaUrl: true,
+                mediaType: true,
+                order: true,
+              },
             },
           },
         },
@@ -172,7 +196,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
                 bookings: {
                   where: {
                     bookingDate: { gte: new Date() },
-                    status: { not: 'CANCELLED' },
+                    status: { not: "CANCELLED" },
                   },
                 },
               },
@@ -180,7 +204,7 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       skip,
       take,
     });
@@ -195,23 +219,26 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
         if (distanceMap[s.id]) {
           distance = distanceMap[s.id].distance;
           distanceText = distanceMap[s.id].distanceText;
-        } else if (latitude && longitude) {
+        } else if (hasCoordinates) {
           distance = calculateDistance(
             parseFloat(latitude as string),
             parseFloat(longitude as string),
             s.latitude,
-            s.longitude
+            s.longitude,
           );
-          // Only show services within 10 km
-          if (distance > 10) return null;
-          distanceText = formatDistance(distance);
+          // The PostGIS ID filter above is authoritative; this value is display-only.
+          distanceText =
+            distance < 0.05 ? "At your location" : formatDistance(distance);
+        } else {
+          distanceText = s.city || "Nearby";
         }
 
         // Calculate available slots for today
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Date().toISOString().split("T")[0];
         const todaySlot = s.slots.find(
-          (slot: any) => today >= slot.startDate.toISOString().split('T')[0] &&
-                   today <= slot.endDate.toISOString().split('T')[0]
+          (slot: any) =>
+            today >= slot.startDate.toISOString().split("T")[0] &&
+            today <= slot.endDate.toISOString().split("T")[0],
         );
 
         const bookedToday = todaySlot?._count.bookings || 0;
@@ -236,41 +263,53 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
           actualPrice: s.actualPrice,
           discountedPrice: s.discountedPrice,
           discountPercentage: s.discountPercentage,
-          discountTier: s.discountPercentage ? getDiscountTier(s.discountPercentage) : null,
+          discountTier: s.discountPercentage
+            ? getDiscountTier(s.discountPercentage)
+            : null,
           // Media
           thumbnailUrl: s.media[0]?.mediaUrl || null,
+          media: s.media || [],
+          images: (s.media || []).map((m: any) => m.mediaUrl).filter(Boolean),
           // Distance
           distance,
           distanceText,
-          // Availability
-          hasActiveSlot: s.slots.length > 0,
-          availableToday,
+          // Availability (default to available so newly created services are immediately visible)
+          hasActiveSlot: true,
+          availableToday: s.slots.length > 0 ? availableToday : 50,
           slotDates: s.slots.map((slot: any) => ({
             startDate: slot.startDate,
             endDate: slot.endDate,
             dailyCount: slot.dailyCount,
           })),
           // Sub-services (free services linked under discount service)
-          subServices: s.subServices ? s.subServices.map((sub: any) => ({
-            id: sub.id,
-            serviceType: sub.serviceType,
-            serviceDetail: sub.serviceDetail,
-            contactNumber: sub.contactNumber,
-            address: sub.address,
-            city: sub.city,
-            latitude: sub.latitude,
-            longitude: sub.longitude,
-            startDate: sub.startDate,
-            endDate: sub.endDate,
-            thumbnailUrl: sub.media[0]?.mediaUrl || null,
-          })) : [],
+          subServices: s.subServices
+            ? s.subServices.map((sub: any) => ({
+                id: sub.id,
+                serviceType: sub.serviceType,
+                serviceDetail: sub.serviceDetail,
+                contactNumber: sub.contactNumber,
+                address: sub.address,
+                city: sub.city,
+                latitude: sub.latitude,
+                longitude: sub.longitude,
+                startDate: sub.startDate,
+                endDate: sub.endDate,
+                thumbnailUrl: sub.media[0]?.mediaUrl || null,
+                media: sub.media || [],
+                images: (sub.media || [])
+                  .map((m: any) => m.mediaUrl)
+                  .filter(Boolean),
+              }))
+            : [],
         };
       })
-      .filter((s: any) => s !== null && s.hasActiveSlot);
+      .filter((s: any) => s !== null);
 
     // Sort by distance if coordinates provided
-    if (latitude && longitude) {
-      filteredServices.sort((a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity));
+    if (hasCoordinates) {
+      filteredServices.sort(
+        (a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity),
+      );
     }
 
     const total = await prisma.service.count({ where });
@@ -292,11 +331,58 @@ export const getServices = async (req: Request, res: Response, next: NextFunctio
   }
 };
 
+/** List active services from other providers near this provider's registered location. */
+export const getNearbyServicesForProvider = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const serviceProviderId = req.user?.serviceProviderId;
+    if (!serviceProviderId) {
+      throw new AppError("Service provider profile not found", 404);
+    }
+
+    const profile = await prisma.serviceProviderProfile.findUnique({
+      where: { id: serviceProviderId },
+      select: { latitude: true, longitude: true, isDisabled: true },
+    });
+    if (!profile || profile.isDisabled) {
+      throw new AppError("Service provider profile is unavailable", 403);
+    }
+    if (profile.latitude == null || profile.longitude == null) {
+      throw new AppError(
+        "Add your business location to see nearby services",
+        400,
+      );
+    }
+
+    req.query = {
+      ...req.query,
+      latitude: String(profile.latitude),
+      longitude: String(profile.longitude),
+      maxDistance: "5000",
+      page: "1",
+      limit: "100",
+    };
+    (
+      req as AuthRequest & { excludeServiceProviderId?: string }
+    ).excludeServiceProviderId = serviceProviderId;
+    return getServices(req, res, next);
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ============================================
 // GET SERVICE DETAIL FOR BOOKING
 // ============================================
 
-export const getServiceById = async (req: Request, res: Response, next: NextFunction) => {
+export const getServiceById = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { id } = req.params;
 
@@ -307,44 +393,64 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
           select: { id: true, businessName: true, isDisabled: true },
         },
         media: {
-          orderBy: { order: 'asc' },
+          orderBy: { order: "asc" },
         },
         slots: {
           where: {
             isActive: true,
             endDate: { gte: new Date() },
           },
-          orderBy: { startDate: 'asc' },
+          orderBy: { startDate: "asc" },
+        },
+        subServices: {
+          where: { isActive: true },
+          include: {
+            media: {
+              where: { mediaType: "PHOTO" },
+              orderBy: { order: "asc" },
+              select: {
+                id: true,
+                mediaUrl: true,
+                mediaType: true,
+                order: true,
+              },
+            },
+          },
         },
       },
     });
 
     if (!service || !service.isActive || service.isDeleted) {
-      throw new AppError('This service is no longer valid. Please select another service.', 404);
+      throw new AppError(
+        "This service is no longer valid. Please select another service.",
+        404,
+      );
     }
 
     if (service.serviceProvider.isDisabled) {
-      throw new AppError('This service is currently unavailable', 400);
+      throw new AppError("This service is currently unavailable", 400);
     }
 
     // Build available dates map
     const availableDates: Record<string, number> = {};
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
 
     for (const slot of service.slots) {
       const start = new Date(slot.startDate);
       const end = new Date(slot.endDate);
-      const current = new Date(Math.max(start.getTime(), new Date(today).getTime()));
+      const current = new Date(
+        Math.max(start.getTime(), new Date(today).getTime()),
+      );
 
       while (current <= end) {
-        const dateStr = current.toISOString().split('T')[0];
-        
+        const dateStr = current.toISOString().split("T")[0];
+
         // Count bookings for this date
         const bookedCount = await prisma.booking.count({
           where: {
             slotId: slot.id,
             bookingDate: new Date(dateStr),
-            status: { not: 'CANCELLED' },
+            status: { not: "CANCELLED" },
           },
         });
 
@@ -372,9 +478,35 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
         actualPrice: service.actualPrice,
         discountedPrice: service.discountedPrice,
         discountPercentage: service.discountPercentage,
-        discountTier: service.discountPercentage ? getDiscountTier(service.discountPercentage) : null,
+        discountTier: service.discountPercentage
+          ? getDiscountTier(service.discountPercentage)
+          : null,
         media: service.media,
+        images: (service.media || [])
+          .map((m: any) => m.mediaUrl)
+          .filter(Boolean),
         availableDates,
+        subServices: (service as any).subServices
+          ? (service as any).subServices.map((sub: any) => ({
+              id: sub.id,
+              serviceType: sub.serviceType,
+              serviceDetail: sub.serviceDetail,
+              contactNumber: sub.contactNumber,
+              address: sub.address,
+              city: sub.city,
+              latitude: sub.latitude,
+              longitude: sub.longitude,
+              startDate: sub.startDate,
+              endDate: sub.endDate,
+              specialInstructions: sub.specialInstructions,
+              termsAndConditions: sub.termsAndConditions,
+              thumbnailUrl: sub.media[0]?.mediaUrl || null,
+              media: sub.media || [],
+              images: (sub.media || [])
+                .map((m: any) => m.mediaUrl)
+                .filter(Boolean),
+            }))
+          : [],
       },
     });
   } catch (error) {
@@ -386,36 +518,74 @@ export const getServiceById = async (req: Request, res: Response, next: NextFunc
 // GET HOME SCREEN CATEGORY COUNTS
 // ============================================
 
-export const getHomeCategories = async (req: Request, res: Response, next: NextFunction) => {
+export const getHomeCategories = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { city } = req.query;
 
     const where: any = {
       isActive: true,
-      serviceMode: 'IN_PERSON',
+      serviceMode: "IN_PERSON",
     };
 
     if (city) {
       where.city = city;
     }
 
-    const [freeCount, highDiscount, medHighDiscount, medLowDiscount, lowDiscount] = await Promise.all([
-      prisma.service.count({ where: { ...where, serviceType: 'FREE' } }),
-      prisma.service.count({ where: { ...where, serviceType: 'DISCOUNTED', discountPercentage: { gt: 90 } } }),
-      prisma.service.count({ where: { ...where, serviceType: 'DISCOUNTED', discountPercentage: { gte: 70, lte: 90 } } }),
-      prisma.service.count({ where: { ...where, serviceType: 'DISCOUNTED', discountPercentage: { gte: 50, lt: 70 } } }),
-      prisma.service.count({ where: { ...where, serviceType: 'DISCOUNTED', discountPercentage: { lt: 50 } } }),
+    const [
+      freeCount,
+      highDiscount,
+      medHighDiscount,
+      medLowDiscount,
+      lowDiscount,
+    ] = await Promise.all([
+      prisma.service.count({ where: { ...where, serviceType: "FREE" } }),
+      prisma.service.count({
+        where: {
+          ...where,
+          serviceType: "DISCOUNTED",
+          discountPercentage: { gt: 90 },
+        },
+      }),
+      prisma.service.count({
+        where: {
+          ...where,
+          serviceType: "DISCOUNTED",
+          discountPercentage: { gte: 70, lte: 90 },
+        },
+      }),
+      prisma.service.count({
+        where: {
+          ...where,
+          serviceType: "DISCOUNTED",
+          discountPercentage: { gte: 50, lt: 70 },
+        },
+      }),
+      prisma.service.count({
+        where: {
+          ...where,
+          serviceType: "DISCOUNTED",
+          discountPercentage: { lt: 50 },
+        },
+      }),
     ]);
 
     res.status(200).json({
       success: true,
       data: {
         categories: [
-          { key: 'FREE', label: 'Free Service', count: freeCount },
-          { key: '>90%', label: '>90% Discount', count: highDiscount },
-          { key: '70-90%', label: '70% – 90% Discount', count: medHighDiscount },
-          { key: '50-70%', label: '50% – 70% Discount', count: medLowDiscount },
-          { key: '<50%', label: '<50% Discount', count: lowDiscount },
+          { key: "FREE", label: "Free Service", count: freeCount },
+          { key: ">90%", label: ">90% Discount", count: highDiscount },
+          {
+            key: "70-90%",
+            label: "70% – 90% Discount",
+            count: medHighDiscount,
+          },
+          { key: "50-70%", label: "50% – 70% Discount", count: medLowDiscount },
+          { key: "<50%", label: "<50% Discount", count: lowDiscount },
         ],
       },
     });
@@ -427,11 +597,15 @@ export const getHomeCategories = async (req: Request, res: Response, next: NextF
 // ============================================
 // UPLOAD / CREATE / UPDATE SERVICE DETAILS
 // ============================================
-export const createService = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const createService = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const spId = req.user!.serviceProviderId;
     if (!spId) {
-      throw new AppError('Service provider profile not found', 400);
+      throw new AppError("Service provider profile not found", 400);
     }
 
     const {
@@ -453,20 +627,24 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
     } = req.body;
 
     if (!specialInstructions || !specialInstructions.trim()) {
-      throw new AppError('Special instructions are mandatory', 400);
+      throw new AppError("Special instructions are mandatory", 400);
     }
     if (!termsAndConditions || !termsAndConditions.trim()) {
-      throw new AppError('Terms and conditions are mandatory', 400);
+      throw new AppError("Terms and conditions are mandatory", 400);
     }
 
-    const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+    const photos = Array.isArray(media)
+      ? media.filter((m: any) => m.mediaType === "PHOTO")
+      : [];
     if (photos.length < 3) {
-      throw new AppError('At least 3 photos are mandatory', 400);
+      throw new AppError("At least 3 photos are mandatory", 400);
     }
 
     let discountPercentage = null;
-    if (serviceType === 'DISCOUNTED' && actualPrice && discountedPrice) {
-      discountPercentage = Math.round(((actualPrice - discountedPrice) / actualPrice) * 100);
+    if (serviceType === "DISCOUNTED" && actualPrice && discountedPrice) {
+      discountPercentage = Math.round(
+        ((actualPrice - discountedPrice) / actualPrice) * 100,
+      );
     }
 
     // Check if a previously deleted service with the same name and type exists for this SP
@@ -474,7 +652,7 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       where: {
         serviceProviderId: spId,
         serviceType,
-        serviceDetail: { equals: serviceDetail.trim(), mode: 'insensitive' },
+        serviceDetail: { equals: serviceDetail.trim(), mode: "insensitive" },
         isDeleted: true,
       },
     });
@@ -492,10 +670,14 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
           longitude: parseFloat(longitude.toString()),
           specialInstructions: specialInstructions.trim(),
           termsAndConditions: termsAndConditions.trim(),
-          actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
-          discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
+          actualPrice:
+            serviceType === "FREE" ? null : parseFloat(actualPrice.toString()),
+          discountedPrice:
+            serviceType === "FREE"
+              ? null
+              : parseFloat(discountedPrice.toString()),
           discountPercentage,
-          parentId: serviceType === 'FREE' ? (parentId || null) : null,
+          parentId: serviceType === "FREE" ? parentId || null : null,
           startDate: startDate ? new Date(startDate) : null,
           endDate: endDate ? new Date(endDate) : null,
           isActive: true,
@@ -505,11 +687,13 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
       });
 
       if (media && Array.isArray(media) && media.length > 0) {
-        await prisma.serviceMedia.deleteMany({ where: { serviceId: existingDeletedService.id } });
+        await prisma.serviceMedia.deleteMany({
+          where: { serviceId: existingDeletedService.id },
+        });
         await prisma.serviceMedia.createMany({
           data: media.map((item: any, idx: number) => ({
             serviceId: existingDeletedService.id,
-            mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
+            mediaType: item.mediaType === "VIDEO" ? "VIDEO" : "PHOTO",
             mediaUrl: item.mediaUrl,
             thumbnailUrl: item.thumbnailUrl || null,
             order: item.order ?? idx,
@@ -529,10 +713,14 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
           longitude: parseFloat(longitude.toString()),
           specialInstructions: specialInstructions.trim(),
           termsAndConditions: termsAndConditions.trim(),
-          actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
-          discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
+          actualPrice:
+            serviceType === "FREE" ? null : parseFloat(actualPrice.toString()),
+          discountedPrice:
+            serviceType === "FREE"
+              ? null
+              : parseFloat(discountedPrice.toString()),
           discountPercentage,
-          parentId: serviceType === 'FREE' ? (parentId || null) : null,
+          parentId: serviceType === "FREE" ? parentId || null : null,
           startDate: startDate ? new Date(startDate) : null,
           endDate: endDate ? new Date(endDate) : null,
           isActive: true,
@@ -545,7 +733,7 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
         await prisma.serviceMedia.createMany({
           data: media.map((item: any, idx: number) => ({
             serviceId: service.id,
-            mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
+            mediaType: item.mediaType === "VIDEO" ? "VIDEO" : "PHOTO",
             mediaUrl: item.mediaUrl,
             thumbnailUrl: item.thumbnailUrl || null,
             order: item.order ?? idx,
@@ -553,16 +741,16 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
         });
       }
     }
-    if (serviceType === 'DISCOUNTED') {
+    if (serviceType === "DISCOUNTED") {
       const sp = await prisma.serviceProviderProfile.findUnique({
         where: { id: spId },
         select: { businessName: true },
       });
-      if (sp?.businessName === 'Super Service Provider') {
+      if (sp?.businessName === "Super Service Provider") {
         await prisma.service.updateMany({
           where: {
             serviceProviderId: spId,
-            serviceType: 'FREE',
+            serviceType: "FREE",
           },
           data: {
             parentId: service.id,
@@ -579,7 +767,7 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
 
     res.status(201).json({
       success: true,
-      message: 'Service created successfully',
+      message: "Service created successfully",
       data: newService,
     });
   } catch (error) {
@@ -587,11 +775,15 @@ export const createService = async (req: AuthRequest, res: Response, next: NextF
   }
 };
 
-export const updateService = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const updateService = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const spId = req.user!.serviceProviderId;
     if (!spId) {
-      throw new AppError('Service provider profile not found', 400);
+      throw new AppError("Service provider profile not found", 400);
     }
 
     const { id } = req.params;
@@ -615,26 +807,36 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
 
     // Verify ownership
     const existingService = await prisma.service.findFirst({
-      where: { id, serviceProviderId: spId }
+      where: { id, serviceProviderId: spId },
     });
 
-    if (specialInstructions !== undefined && (!specialInstructions || !specialInstructions.trim())) {
-      throw new AppError('Special instructions cannot be empty', 400);
+    if (
+      specialInstructions !== undefined &&
+      (!specialInstructions || !specialInstructions.trim())
+    ) {
+      throw new AppError("Special instructions cannot be empty", 400);
     }
-    if (termsAndConditions !== undefined && (!termsAndConditions || !termsAndConditions.trim())) {
-      throw new AppError('Terms and conditions cannot be empty', 400);
+    if (
+      termsAndConditions !== undefined &&
+      (!termsAndConditions || !termsAndConditions.trim())
+    ) {
+      throw new AppError("Terms and conditions cannot be empty", 400);
     }
 
     if (media !== undefined) {
-      const photos = Array.isArray(media) ? media.filter((m: any) => m.mediaType === 'PHOTO') : [];
+      const photos = Array.isArray(media)
+        ? media.filter((m: any) => m.mediaType === "PHOTO")
+        : [];
       if (photos.length < 3) {
-        throw new AppError('At least 3 photos are mandatory', 400);
+        throw new AppError("At least 3 photos are mandatory", 400);
       }
     }
 
     let discountPercentage = null;
-    if (serviceType === 'DISCOUNTED' && actualPrice && discountedPrice) {
-      discountPercentage = Math.round(((actualPrice - discountedPrice) / actualPrice) * 100);
+    if (serviceType === "DISCOUNTED" && actualPrice && discountedPrice) {
+      discountPercentage = Math.round(
+        ((actualPrice - discountedPrice) / actualPrice) * 100,
+      );
     }
 
     const service = await prisma.service.update({
@@ -647,12 +849,22 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
         city,
         latitude: parseFloat(latitude.toString()),
         longitude: parseFloat(longitude.toString()),
-        specialInstructions: specialInstructions !== undefined ? specialInstructions.trim() : undefined,
-        termsAndConditions: termsAndConditions !== undefined ? termsAndConditions.trim() : undefined,
-        actualPrice: serviceType === 'FREE' ? null : parseFloat(actualPrice.toString()),
-        discountedPrice: serviceType === 'FREE' ? null : parseFloat(discountedPrice.toString()),
+        specialInstructions:
+          specialInstructions !== undefined
+            ? specialInstructions.trim()
+            : undefined,
+        termsAndConditions:
+          termsAndConditions !== undefined
+            ? termsAndConditions.trim()
+            : undefined,
+        actualPrice:
+          serviceType === "FREE" ? null : parseFloat(actualPrice.toString()),
+        discountedPrice:
+          serviceType === "FREE"
+            ? null
+            : parseFloat(discountedPrice.toString()),
         discountPercentage,
-        parentId: serviceType === 'FREE' ? (parentId || null) : null,
+        parentId: serviceType === "FREE" ? parentId || null : null,
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
       },
@@ -666,23 +878,23 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
       await prisma.serviceMedia.createMany({
         data: media.map((item: any, idx: number) => ({
           serviceId: service.id,
-          mediaType: item.mediaType === 'VIDEO' ? 'VIDEO' : 'PHOTO',
+          mediaType: item.mediaType === "VIDEO" ? "VIDEO" : "PHOTO",
           mediaUrl: item.mediaUrl,
           thumbnailUrl: item.thumbnailUrl || null,
           order: item.order ?? idx,
         })),
       });
     }
-    if (serviceType === 'DISCOUNTED') {
+    if (serviceType === "DISCOUNTED") {
       const sp = await prisma.serviceProviderProfile.findUnique({
         where: { id: spId },
         select: { businessName: true },
       });
-      if (sp?.businessName === 'Super Service Provider') {
+      if (sp?.businessName === "Super Service Provider") {
         await prisma.service.updateMany({
           where: {
             serviceProviderId: spId,
-            serviceType: 'FREE',
+            serviceType: "FREE",
           },
           data: {
             parentId: service.id,
@@ -699,7 +911,7 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
 
     res.status(200).json({
       success: true,
-      message: 'Service updated successfully',
+      message: "Service updated successfully",
       data: updatedService,
     });
   } catch (error) {
@@ -707,12 +919,16 @@ export const updateService = async (req: AuthRequest, res: Response, next: NextF
   }
 };
 
-export const deleteService = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const deleteService = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { id } = req.params;
     const spId = req.user?.serviceProviderId;
     const role = req.user?.role;
-    const isSuperAdmin = role === 'SUPER_ADMIN';
+    const isSuperAdmin = role === "SUPER_ADMIN";
 
     let existingService;
     if (isSuperAdmin) {
@@ -721,7 +937,7 @@ export const deleteService = async (req: AuthRequest, res: Response, next: NextF
       });
     } else {
       if (!spId) {
-        throw new AppError('Service provider profile not found', 400);
+        throw new AppError("Service provider profile not found", 400);
       }
       existingService = await prisma.service.findFirst({
         where: { id, serviceProviderId: spId, isDeleted: false },
@@ -729,7 +945,7 @@ export const deleteService = async (req: AuthRequest, res: Response, next: NextF
     }
 
     if (!existingService) {
-      throw new AppError('Service not found or unauthorized', 404);
+      throw new AppError("Service not found or unauthorized", 404);
     }
 
     const now = new Date();
@@ -784,10 +1000,9 @@ export const deleteService = async (req: AuthRequest, res: Response, next: NextF
 
     res.status(200).json({
       success: true,
-      message: 'Service deleted successfully'
+      message: "Service deleted successfully",
     });
   } catch (error) {
     next(error);
   }
 };
-

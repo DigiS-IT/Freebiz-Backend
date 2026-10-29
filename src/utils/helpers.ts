@@ -61,6 +61,18 @@ export const formatDistance = (distance: number): string => {
   return `${distance.toFixed(1)} km`;
 };
 
+/** Format a date as the application's calendar day, independent of server timezone. */
+export const appDateKey = (date: Date): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: process.env.APP_TIME_ZONE || 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 export const generateQRData = (bookingCode: string, serviceId: string, bookingDate: string, secret: string): string => {
   const payload = {
     bc: bookingCode,

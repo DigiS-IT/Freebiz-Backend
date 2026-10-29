@@ -1,19 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { AppError, validateQRData } from '../utils/helpers';
+import { AppError, appDateKey, validateQRData } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
-
-const appDateKey = (date: Date): string => {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: process.env.APP_TIME_ZONE || 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-};
 
 type ScanningUser = {
   serviceProviderId: string | null;
@@ -120,7 +109,7 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
       });
     }
 
-    const storedBookingDate = booking.bookingDate.toISOString().slice(0, 10);
+    const storedBookingDate = appDateKey(booking.bookingDate);
     if (
       decoded.serviceId !== booking.serviceId ||
       decoded.bookingDate !== storedBookingDate
@@ -145,7 +134,7 @@ export const scanQRCode = async (req: AuthRequest, res: Response, next: NextFunc
     }
 
     // Check booking date
-    if (booking.bookingDate.toISOString().slice(0, 10) !== today) {
+    if (storedBookingDate < today) {
       return res.status(200).json({
         success: false,
         valid: false,
@@ -250,10 +239,10 @@ export const acceptQRCode = async (req: AuthRequest, res: Response, next: NextFu
       }
 
       const today = appDateKey(new Date());
-      if (booking.bookingDate.toISOString().slice(0, 10) !== today) {
+      const bookingDate = appDateKey(booking.bookingDate);
+      if (bookingDate < today) {
         throw new AppError('QR code expired', 400);
       }
-
       if (!booking.qrCode) {
         throw new AppError('QR code record not found for this booking', 400);
       }

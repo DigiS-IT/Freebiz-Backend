@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { appDateKey } from './helpers';
 
 /**
  * Cron job to mark bookings as EXPIRED when the booking date passes
@@ -10,8 +11,9 @@ export const setupExpiredBookingsJob = () => {
   
   const markExpiredBookings = async () => {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      // Booking dates are stored as date-only values. Compare them with the
+      // start of today in the app timezone, represented as a UTC date key.
+      const today = new Date(`${appDateKey(new Date())}T00:00:00.000Z`);
 
       const result = await prisma.booking.updateMany({
         where: {

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/helpers';
-import { UserRole, SubscriptionStatus } from '@prisma/client';
+import { UserRole, SubscriptionStatus, BookingStatus } from '@prisma/client';
 
 // ============================================
 // ADMIN DASHBOARD & DEMOGRAPHICS HELPERS
@@ -891,6 +891,45 @@ export const getCustomers = async (req: Request, res: Response, next: NextFuncti
     }));
 
     res.status(200).json({ success: true, customers: formatted });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Booking report for Super Admin, optionally filtered by service provider.
+export const getBookingReport = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const providerId = typeof req.query.providerId === 'string' ? req.query.providerId : undefined;
+    const bookings = await prisma.booking.findMany({
+      where: {
+        status: { in: [BookingStatus.BOOKED, BookingStatus.USED] },
+        ...(providerId ? { service: { serviceProviderId: providerId } } : {}),
+      },
+      include: {
+        customer: { include: { user: { select: { phone: true } } } },
+        service: { include: { serviceProvider: { select: { id: true, businessName: true } } } },
+        slot: { select: { startDate: true, endDate: true } },
+      },
+      orderBy: [{ bookingDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    res.status(200).json({
+      success: true,
+      bookings: bookings.map((booking) => ({
+        id: booking.id,
+        bookingCode: booking.bookingCode,
+        status: booking.status.toLowerCase(),
+        customerName: booking.customer.name || 'Customer',
+        customerPhone: booking.customer.user?.phone || 'No phone',
+        serviceName: booking.service.serviceDetail,
+        serviceType: booking.service.serviceType.toLowerCase(),
+        providerId: booking.service.serviceProvider.id,
+        providerName: booking.service.serviceProvider.businessName,
+        bookingDate: booking.bookingDate.toISOString().slice(0, 10),
+        offerStartDate: booking.slot.startDate.toISOString().slice(0, 10),
+        offerEndDate: booking.slot.endDate.toISOString().slice(0, 10),
+      })),
+    });
   } catch (error) {
     next(error);
   }

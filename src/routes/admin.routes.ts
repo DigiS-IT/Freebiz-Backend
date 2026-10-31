@@ -18,6 +18,7 @@ router.delete('/providers/:id', authenticate, superAdminOnly, adminController.de
 
 // Customers management
 router.get('/customers', authenticate, superAdminOnly, adminController.getCustomers);
+router.get('/booking-report', authenticate, superAdminOnly, adminController.getBookingReport);
 
 // Revenue & Subscriptions management
 router.get('/revenue', authenticate, superAdminOnly, adminController.getRevenue);

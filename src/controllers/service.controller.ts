@@ -82,7 +82,13 @@ export const getServices = async (
     // discovery requests (where the customer has no coordinates).
     const hasCoordinates = latitude !== undefined && longitude !== undefined;
     if (city && !hasCoordinates) {
-      where.city = { equals: city as string, mode: "insensitive" };
+      const selectedCity = (city as string).trim();
+      const normalizedCity = selectedCity.toLowerCase();
+      const cityNames =
+        normalizedCity === "bangalore" || normalizedCity === "bengaluru"
+          ? ["Bengaluru", "Bangalore"]
+          : [selectedCity];
+      where.city = { in: cityNames, mode: "insensitive" };
     }
 
     // Search by SP name or location

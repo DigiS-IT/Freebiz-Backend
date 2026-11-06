@@ -1,0 +1,222 @@
+# Source-release pipeline for the Freebiz backend (Node + TypeScript + Prisma).
+#
+#   git push origin publish   ->  publishes a GitHub Release whose asset is a zip of the tracked code
+#   Actions -> Run workflow   ->  same thing, on demand, for any branch you pick
+#   [skip release] in the commit message (or subject) -> pushes without creating a release
+#
+# The asset is `git archive` of the commit: exactly the tracked source, never node_modules, dist/ or
+# coverage. This job does not build or deploy anything.
+#
+# Read this before the first run - two things are missing or blocking in this repo today:
+#   1. There is no `publish` branch here yet (origin has dev and main). Create the branch you want to
+#      release from, otherwise this workflow never fires:
+#          git push origin origin/main:refs/heads/publish
+#   2. The credential gate below FAILS today, on purpose. The repo tracks a Firebase Admin service
+#      account key at src/config/freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json (real private
+#      key material) and a second copy inside the tracked dist.zip. Publishing a source zip would
+#      hand that key to everyone who can read the release. Fix before enabling:
+#          - revoke/rotate that service account key in Google Cloud (history keeps the old one valid
+#            as leaked, so rotation is not optional)
+#          - git rm --cached src/config/freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json dist.zip
+#          - add both paths to .gitignore, then scrub history if the repo is or becomes public
+#
+# Tag shape: `backend-v<package.json version>-<short sha>`; the sha makes every push unique. Re-running
+# a commit that is already released reports the existing release and stops, it does not fail.
+# Needs only the default `contents: write` token - no secrets to configure.
+
+name: Backend source release on publish
+
+on:
+  push:
+    branches:
+      - publish
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to release from
+        required: true
+        default: publish
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backend-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Zip the code and publish the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Refuse to publish credentials
+        run: |
+          # A source release is an archive anyone with repository access can unzip, so the tree is
+          # checked three ways: file names, file contents, and the contents of tracked archives.
+          paths=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)\.env\.(local|dev|development|staging|prod|production|test\.local)$|\.(pem|p12|jks|keystore|mobileprovision)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|adminsdk|fbsvc|serviceaccount|(^|/)(credentials?|secrets?)(\.|_)' || true)
+          content=$(git grep -l -I -E -e '-----BEGIN [A-Z ]*PRIVATE KEY' HEAD 2>/dev/null | sed 's|^HEAD:||' || true)
+          inside=""
+          while IFS= read -r archive; do
+            if [ -n "$archive" ]; then
+              hit=$(unzip -Z1 "$archive" 2>/dev/null | grep -iE 'adminsdk|fbsvc|serviceaccount|private.*key|\.env$|\.pem$|credentials' || true)
+              if [ -n "$hit" ]; then
+                inside="${inside}${archive}: $(printf '%s' "$hit" | tr '\n' ' ')"$'\n'
+              fi
+            fi
+          done < <(git ls-files '*.zip' '*.jar' '*.tar' '*.tar.gz')
+          found=0
+          if [ -n "$paths" ]; then
+            printf 'Credential-shaped tracked path(s):\n%s\n' "$paths"
+            found=1
+          fi
+          if [ -n "$content" ]; then
+            printf 'Tracked file(s) containing private key material:\n%s\n' "$content"
+            found=1
+          fi
+          if [ -n "$inside" ]; then
+            printf 'Credential(s) inside a tracked archive:\n%s\n' "$inside"
+            found=1
+          fi
+          if [ "$found" = "1" ]; then
+            echo "::error::Refusing to publish. Remove these from git (git rm --cached), add them to .gitignore, and rotate the credential anyway - a key that was committed stays compromised in history."
+            exit 1
+          fi
+          echo "Clean: $(git ls-files | wc -l) tracked files, nothing credential-shaped in paths, contents or nested archives."
+
+      - name: Work out the release identity
+        id: rel
+        run: |
+          version=$(node -p "require('./package.json').version")
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::package.json version is '$version' - expected MAJOR.MINOR.PATCH."; exit 1 ;;
+          esac
+          sha=$(git rev-parse --short=7 HEAD)
+          tag="backend-v${version}-${sha}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "dir=$tag" >> "$GITHUB_OUTPUT"
+          echo "zip=${tag}.zip" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "already=passed" >> "$GITHUB_OUTPUT"
+            echo "Commit $sha is already released as $tag - no new release will be created."
+          else
+            echo "already=fresh" >> "$GITHUB_OUTPUT"
+            echo "Release target: $tag"
+          fi
+
+      - name: Zip the tracked code
+        if: steps.rel.outputs.already == 'fresh'
+        env:
+          ZIP_NAME: ${{ steps.rel.outputs.zip }}
+          DIR_NAME: ${{ steps.rel.outputs.dir }}
+        run: |
+          mkdir -p artifact
+          # --prefix keeps the archive in one folder instead of dumping src/ at the extraction point.
+          git archive --format=zip --prefix="$DIR_NAME/" -o "artifact/$ZIP_NAME" HEAD
+          test -s "artifact/$ZIP_NAME" || { echo "::error::git archive wrote an empty file."; exit 1; }
+          entries=$(unzip -Z1 "artifact/$ZIP_NAME" | grep -cv '/$')
+          echo "Archived $entries files (tracked: $(git ls-files | wc -l)), $(du -h "artifact/$ZIP_NAME" | cut -f1)."
+          if unzip -Z1 "artifact/$ZIP_NAME" | grep -qE '(^|/)(node_modules|coverage|\.next)/|(^|/)dist/'; then
+            echo "::error::The archive contains dependency or build directories - only tracked source may ship."
+            exit 1
+          fi
+
+      - name: Compose release notes
+        if: steps.rel.outputs.already == 'fresh'
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          DIR_NAME: ${{ steps.rel.outputs.dir }}
+          ZIP_NAME: ${{ steps.rel.outputs.zip }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          head=$(git rev-parse HEAD)
+          prev=$(git describe --tags --abbrev=0 --match 'backend-v*' "$head" 2>/dev/null || true)
+          if [ -n "$prev" ]; then
+            heading="Changes since \`$prev\`"
+            log=$(git log --pretty='- %s (%h, %an)' "$prev..$head")
+          else
+            heading="Commits in this snapshot"
+            log=$(git log -n 30 --pretty='- %s (%h, %an)' "$head")
+          fi
+          {
+            echo "Source snapshot of \`$BRANCH\` at commit \`$SHA\`. The asset is the tracked repository tree only - no dependencies, no compiled \`dist/\`, no \`.env\`, and this release does not deploy anything."
+            echo
+            echo "| package.json version | Commit | Pushed by |"
+            echo "| --- | --- | --- |"
+            echo "| \`$VERSION\` | \`$SHA\` (\`$head\`) | \`$GITHUB_ACTOR\` |"
+            echo
+            echo "## $heading"
+            echo
+            echo "${log:-This commit only.}"
+            echo
+            echo "## Building from this zip"
+            echo
+            echo '```bash'
+            echo "unzip $ZIP_NAME && cd $DIR_NAME"
+            echo "cp .env.example .env    # fill in real values - .env is never in the archive"
+            echo "corepack enable"
+            echo "pnpm install --frozen-lockfile"
+            echo "pnpm run prisma:generate"
+            echo "pnpm run build"
+            echo "pnpm run start"
+            echo '```'
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create the GitHub Release
+        if: steps.rel.outputs.already == 'fresh'
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          ZIP_NAME: ${{ steps.rel.outputs.zip }}
+          VERSION: ${{ steps.rel.outputs.version }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" "artifact/$ZIP_NAME" \
+            --target "$(git rev-parse HEAD)" \
+            --title "Freebiz backend $VERSION ($SHA)" \
+            --notes-file release-notes.md
+
+      - name: Confirm the release is live
+        if: steps.rel.outputs.already == 'fresh'
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          ZIP_NAME: ${{ steps.rel.outputs.zip }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url=$(gh release view "$TAG" --json url --jq .url) \
+            || { echo "::error::Release $TAG was created but is not readable."; exit 1; }
+          assets=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(", ")')
+          case ",$assets," in
+            *",$ZIP_NAME,"*) ;;
+            *) echo "::error::Release $TAG has no zip attached (assets: ${assets:-none})."; exit 1 ;;
+          esac
+          {
+            echo "### Release \`$TAG\` published"
+            echo
+            echo "- **$url**"
+            echo "- Asset: \`$ZIP_NAME\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report an already released commit
+        if: steps.rel.outputs.already == 'passed'
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url=$(gh release view "$TAG" --json url --jq .url)
+          echo "No new release: $TAG already exists from a previous push of this commit."
+          echo "- **$url**" >> "$GITHUB_STEP_SUMMARY"

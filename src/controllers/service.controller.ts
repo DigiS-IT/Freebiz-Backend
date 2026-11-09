@@ -9,6 +9,7 @@ import {
 } from "../utils/helpers";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import { findNearbyServices } from "../utils/geo";
+import { getSlotCapacityForDate } from "../utils/slot-schedule";
 
 // ============================================
 // GET SERVICES FOR CUSTOMER (With Location)
@@ -407,6 +408,7 @@ export const getServiceById = async (
         slots: {
           where: {
             isActive: true,
+            isDeleted: false,
             endDate: { gte: new Date() },
           },
           orderBy: { startDate: "asc" },
@@ -442,29 +444,72 @@ export const getServiceById = async (
 
     // Build available dates map
     const availableDates: Record<string, number> = {};
+    const availableTimeSlots: Record<string, { startTime: string; endTime: string; availableCount: number }[]> = {};
     const today = new Date().toISOString().split("T")[0];
+    if (service.slots.length > 0) {
+      const nextDate = new Date(`${today}T00:00:00.000Z`);
+      for (let day = 0; day < 90; day++) {
+        const date = nextDate.toISOString().slice(0, 10);
+        availableDates[date] = 0;
+        nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+      }
+    }
 
     for (const slot of service.slots) {
       const start = new Date(slot.startDate);
       const end = new Date(slot.endDate);
-      const current = new Date(
-        Math.max(start.getTime(), new Date(today).getTime()),
-      );
+      const todayUtc = Date.parse(`${today}T00:00:00.000Z`);
+      const current = new Date(Math.max(
+        Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()),
+        todayUtc,
+      ));
+      const slotEndUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+      const endUtc = Math.min(slotEndUtc, todayUtc + 89 * 86_400_000);
+      const bookedRows = await prisma.booking.groupBy({
+        by: ['bookingDate', 'bookingTimeStart'],
+        where: {
+          slotId: slot.id,
+          bookingDate: { gte: current, lte: new Date(endUtc) },
+          status: { not: 'CANCELLED' },
+        },
+        _sum: { registrationCount: true },
+      });
+      const bookedByDate = new Map<string, number>();
+      const bookedByTime = new Map<string, number>();
+      for (const row of bookedRows) {
+        const date = row.bookingDate.toISOString().slice(0, 10);
+        const reserved = row._sum.registrationCount ?? 0;
+        bookedByDate.set(date, (bookedByDate.get(date) ?? 0) + reserved);
+        const key = `${date}|${row.bookingTimeStart ?? ''}`;
+        bookedByTime.set(key, (bookedByTime.get(key) ?? 0) + reserved);
+      }
 
-      while (current <= end) {
+      while (current.getTime() <= endUtc) {
         const dateStr = current.toISOString().split("T")[0];
-
-        // Count bookings for this date
-        const bookedCount = await prisma.booking.count({
-          where: {
-            slotId: slot.id,
-            bookingDate: new Date(dateStr),
-            status: { not: "CANCELLED" },
-          },
-        });
-
-        availableDates[dateStr] = slot.dailyCount - bookedCount;
-        current.setDate(current.getDate() + 1);
+        const bookedCount = bookedByDate.get(dateStr) ?? 0;
+        const capacity = getSlotCapacityForDate(slot, current);
+        if (Array.isArray(slot.timeSlots) && Array.isArray(slot.weeklySchedule)) {
+          let unassignedBookings = bookedByTime.get(`${dateStr}|`) ?? 0;
+          const daySlots = (slot.timeSlots as any[])
+            .filter((item) => item.weekday === current.getUTCDay())
+            .sort((a, b) => a.startTime.localeCompare(b.startTime));
+          const options = daySlots.map((item) => {
+            const intervalCapacity = Number(item.capacity) || 0;
+            const reservedForTime = bookedByTime.get(`${dateStr}|${item.startTime}`) ?? 0;
+            const assignedLegacy = Math.min(intervalCapacity, unassignedBookings);
+            unassignedBookings -= assignedLegacy;
+            return {
+              startTime: item.startTime,
+              endTime: item.endTime,
+              availableCount: Math.max(0, intervalCapacity - reservedForTime - assignedLegacy),
+            };
+          });
+          availableTimeSlots[dateStr] = options;
+          availableDates[dateStr] = options.reduce((sum, item) => sum + item.availableCount, 0);
+        } else {
+          availableDates[dateStr] = Math.max(0, capacity - bookedCount);
+        }
+        current.setUTCDate(current.getUTCDate() + 1);
       }
     }
 
@@ -495,6 +540,8 @@ export const getServiceById = async (
           .map((m: any) => m.mediaUrl)
           .filter(Boolean),
         availableDates,
+        availableTimeSlots,
+        perPersonMaxRegistration: service.slots[0]?.perPersonMaxRegistration ?? 1,
         subServices: (service as any).subServices
           ? (service as any).subServices.map((sub: any) => ({
               id: sub.id,

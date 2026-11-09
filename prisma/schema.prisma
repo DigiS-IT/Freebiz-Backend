@@ -60,25 +60,25 @@ enum OtpPurpose {
 // ============================================
 
 model User {
-  id                String    @id @default(uuid())
-  name              String?
-  profilePic        String?
-  phone             String    @unique
-  email             String?   @unique
-  password          String?
-  role              UserRole
-  isActive          Boolean   @default(true)
-  isDeleted         Boolean   @default(false)
-  deletedAt         DateTime?
-  mustChangePassword Boolean  @default(false)
-  lastLoginAt       DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  magicToken        String?   @unique
-  magicTokenExpires DateTime?
+  id                 String    @id @default(uuid())
+  name               String?
+  profilePic         String?
+  phone              String    @unique
+  email              String?   @unique
+  password           String?
+  role               UserRole
+  isActive           Boolean   @default(true)
+  isDeleted          Boolean   @default(false)
+  deletedAt          DateTime?
+  mustChangePassword Boolean   @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  magicToken         String?   @unique
+  magicTokenExpires  DateTime?
 
   // Relations - Customer
-  customerProfile   CustomerProfile?
+  customerProfile CustomerProfile?
 
   // Relations - Service Provider (multiple users can belong to one SP)
   serviceProviderId String?
@@ -88,15 +88,15 @@ model User {
   superAdminProfile SuperAdminProfile?
 
   // Relations - Who created this SP user (for Mobile SP users)
-  createdByUserId   String?
-  createdByUser     User?     @relation("SPUserCreator", fields: [createdByUserId], references: [id])
-  createdSpUsers    User[]    @relation("SPUserCreator")
+  createdByUserId String?
+  createdByUser   User?   @relation("SPUserCreator", fields: [createdByUserId], references: [id])
+  createdSpUsers  User[]  @relation("SPUserCreator")
 
   // Relations - OTP
-  otps              Otp[]
+  otps Otp[]
 
   // Relations - Scanned QR Codes
-  scannedQRCodes    QRCode[]  @relation("ScannedBy")
+  scannedQRCodes QRCode[] @relation("ScannedBy")
 
   @@index([phone])
   @@index([serviceProviderId])
@@ -104,14 +104,14 @@ model User {
 }
 
 model Otp {
-  id          String     @id @default(uuid())
-  userId      String?
-  phone       String
-  code        String
-  purpose     OtpPurpose
-  isVerified  Boolean    @default(false)
-  expiresAt   DateTime
-  createdAt   DateTime   @default(now())
+  id         String     @id @default(uuid())
+  userId     String?
+  phone      String
+  code       String
+  purpose    OtpPurpose
+  isVerified Boolean    @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime   @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -124,25 +124,25 @@ model Otp {
 // ============================================
 
 model CustomerProfile {
-  id              String    @id @default(uuid())
-  userId          String    @unique
-  name            String
-  age             Int?
-  gender          String?
-  profilePicture  String?
-  address         String?
-  city            String?
-  state           String?
-  latitude        Float?
-  longitude       Float?
-  isProfileComplete Boolean @default(false)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  name              String
+  age               Int?
+  gender            String?
+  profilePicture    String?
+  address           String?
+  city              String?
+  state             String?
+  latitude          Float?
+  longitude         Float?
+  isProfileComplete Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   // Relations
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bookings  Booking[]
-  ratings   Rating[]
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+  ratings  Rating[]
 
   @@index([city])
   @@index([state])
@@ -168,24 +168,24 @@ model SuperAdminProfile {
 // ============================================
 
 model ServiceProviderProfile {
-  id           String    @id @default(uuid())
-  businessName String
-  businessEmail String?
-  profilePic   String?
-  primaryContact String?
+  id               String    @id @default(uuid())
+  businessName     String
+  businessEmail    String?
+  profilePic       String?
+  primaryContact   String?
   secondaryContact String?
-  address      String?   @db.Text
-  city         String?
-  latitude     Float?
-  longitude    Float?
-  isDisabled   Boolean   @default(false)
-  disabledAt   DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  address          String?   @db.Text
+  city             String?
+  latitude         Float?
+  longitude        Float?
+  isDisabled       Boolean   @default(false)
+  disabledAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   // Relations
-  users        User[]
-  services     Service[]
+  users         User[]
+  services      Service[]
   subscriptions Subscription[]
 
   @@index([isDisabled])
@@ -195,7 +195,7 @@ model ServiceProviderProfile {
 model Service {
   id                  String      @id @default(uuid())
   serviceProviderId   String
-  serviceType         ServiceType  // FREE or DISCOUNTED
+  serviceType         ServiceType // FREE or DISCOUNTED
   serviceDetail       String      @db.Text
   contactNumber       String
   address             String      @db.Text
@@ -214,20 +214,20 @@ model Service {
   updatedAt           DateTime    @updatedAt
 
   // Discounted service pricing (null for FREE services)
-  actualPrice         Float?
-  discountedPrice     Float?
-  discountPercentage  Float?
+  actualPrice        Float?
+  discountedPrice    Float?
+  discountPercentage Float?
 
   // Relations
-  serviceProvider  ServiceProviderProfile @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
-  media            ServiceMedia[]
-  slots            ServiceSlot[]
-  bookings         Booking[]
+  serviceProvider ServiceProviderProfile @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+  media           ServiceMedia[]
+  slots           ServiceSlot[]
+  bookings        Booking[]
 
   // Self-relation to link FREE services under DISCOUNTED services
-  parentId            String?
-  parentService       Service?    @relation("ServiceToService", fields: [parentId], references: [id], onDelete: SetNull)
-  subServices         Service[]   @relation("ServiceToService")
+  parentId      String?
+  parentService Service?  @relation("ServiceToService", fields: [parentId], references: [id], onDelete: SetNull)
+  subServices   Service[] @relation("ServiceToService")
 
   @@index([city])
   @@index([isActive])
@@ -238,13 +238,13 @@ model Service {
 }
 
 model ServiceMedia {
-  id          String    @id @default(uuid())
-  serviceId   String
-  mediaType   MediaType  // PHOTO or VIDEO
-  mediaUrl    String
-  thumbnailUrl String?   // For videos
-  order       Int       @default(0)
-  createdAt   DateTime  @default(now())
+  id           String    @id @default(uuid())
+  serviceId    String
+  mediaType    MediaType // PHOTO or VIDEO
+  mediaUrl     String
+  thumbnailUrl String? // For videos
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
@@ -252,19 +252,24 @@ model ServiceMedia {
 }
 
 model ServiceSlot {
-  id                   String   @id @default(uuid())
-  serviceId            String
-  startDate            DateTime @db.Date
-  endDate              DateTime @db.Date
-  dailyCount           Int
-  totalCount           Int
-  specialInstructions  String?  @db.Text
-  termsAndConditions   String?  @db.Text
-  isActive             Boolean  @default(true)
-  isDeleted            Boolean  @default(false)
-  deletedAt            DateTime?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                       String    @id @default(uuid())
+  serviceId                String
+  startDate                DateTime  @db.Date
+  endDate                  DateTime  @db.Date
+  dailyCount               Int
+  totalCount               Int
+  slotIntervalMinutes      Int       @default(60)
+  perSlotCount             Int       @default(1)
+  perPersonMaxRegistration Int       @default(1)
+  weeklySchedule           Json?
+  timeSlots                Json?
+  specialInstructions      String?   @db.Text
+  termsAndConditions       String?   @db.Text
+  isActive                 Boolean   @default(true)
+  isDeleted                Boolean   @default(false)
+  deletedAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   // Relations
   service  Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
@@ -281,50 +286,54 @@ model ServiceSlot {
 // ============================================
 
 model Booking {
-  id                  String        @id @default(uuid())
-  bookingCode         String        @unique  // Human-readable: FB-20250501-XXXX
-  customerId          String
-  serviceId           String
-  slotId              String
-  bookingDate         DateTime      @db.Date  // Date customer selected
-  status              BookingStatus @default(BOOKED)
-  cancellationReason  String?       @db.Text
-  rejectionReason     String?       @db.Text
-  cancelledAt         DateTime?
-  expiredAt           DateTime?
-  usedAt              DateTime?
-  rejectedAt          DateTime?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  id                 String        @id @default(uuid())
+  bookingCode        String        @unique // Human-readable: FB-20250501-XXXX
+  customerId         String
+  serviceId          String
+  slotId             String
+  bookingDate        DateTime      @db.Date // Date customer selected
+  registrationCount  Int           @default(1)
+  bookingTimeStart   String?
+  bookingTimeEnd     String?
+  status             BookingStatus @default(BOOKED)
+  cancellationReason String?       @db.Text
+  rejectionReason    String?       @db.Text
+  cancelledAt        DateTime?
+  expiredAt          DateTime?
+  usedAt             DateTime?
+  rejectedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   // Relations
-  customer    CustomerProfile      @relation(fields: [customerId], references: [id])
-  service     Service              @relation(fields: [serviceId], references: [id])
-  slot        ServiceSlot          @relation(fields: [slotId], references: [id])
-  qrCode      QRCode?
-  rating      Rating?
+  customer CustomerProfile @relation(fields: [customerId], references: [id])
+  service  Service         @relation(fields: [serviceId], references: [id])
+  slot     ServiceSlot     @relation(fields: [slotId], references: [id])
+  qrCode   QRCode?
+  rating   Rating?
 
   @@index([customerId, status])
   @@index([serviceId, status])
   @@index([slotId])
+  @@index([slotId, bookingDate, bookingTimeStart, status])
   @@index([bookingDate])
   @@index([status])
-  @@index([bookingDate, status])  // For expired job
+  @@index([bookingDate, status]) // For expired job
 }
 
 model QRCode {
-  id            String    @id @default(uuid())
-  bookingId     String    @unique
-  qrData        String    @db.Text  // Encoded data for validation
-  qrImageUrl    String              // URL to QR image with FreeBiz logo
-  isUsed        Boolean   @default(false)
-  scannedAt     DateTime?
-  scannedByUserId String?           // SP user who scanned
-  createdAt     DateTime  @default(now())
+  id              String    @id @default(uuid())
+  bookingId       String    @unique
+  qrData          String    @db.Text // Encoded data for validation
+  qrImageUrl      String // URL to QR image with FreeBiz logo
+  isUsed          Boolean   @default(false)
+  scannedAt       DateTime?
+  scannedByUserId String? // SP user who scanned
+  createdAt       DateTime  @default(now())
 
   // Relations
-  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  scannedByUser User?  @relation("ScannedBy", fields: [scannedByUserId], references: [id])
+  booking       Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  scannedByUser User?   @relation("ScannedBy", fields: [scannedByUserId], references: [id])
 
   @@index([isUsed])
   @@index([qrData])
@@ -335,13 +344,13 @@ model QRCode {
 // ============================================
 
 model Rating {
-  id          String   @id @default(uuid())
-  bookingId   String   @unique
-  customerId  String
-  stars       Int      // 1-5
-  review      String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(uuid())
+  bookingId  String   @unique
+  customerId String
+  stars      Int // 1-5
+  review     String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   // Relations
   booking  Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
@@ -356,14 +365,14 @@ model Rating {
 // ============================================
 
 model Subscription {
-  id                  String            @id @default(uuid())
-  serviceProviderId   String
-  startDate           DateTime          @db.Date
-  endDate             DateTime          @db.Date
-  status              SubscriptionStatus
-  notes               String?           @db.Text
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  id                String             @id @default(uuid())
+  serviceProviderId String
+  startDate         DateTime           @db.Date
+  endDate           DateTime           @db.Date
+  status            SubscriptionStatus
+  notes             String?            @db.Text
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   // Relations
   serviceProvider ServiceProviderProfile @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
@@ -378,16 +387,16 @@ model Subscription {
 // ============================================
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  userId      String?
-  action      String
-  entity      String
-  entityId    String?
-  oldValue    Json?
-  newValue    Json?
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  oldValue  Json?
+  newValue  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([entity, entityId])

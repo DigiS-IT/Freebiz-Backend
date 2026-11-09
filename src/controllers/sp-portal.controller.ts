@@ -1,9 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
+import { calculateScheduleCounts, normalizeSlotSchedule, redistributeDailyCapacity, SlotScheduleError } from '../utils/slot-schedule';
 
 // Get SP Portal Stats
 export const getSpStats = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -468,6 +469,11 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
+        slotIntervalMinutes: slot.slotIntervalMinutes,
+        perSlotCount: slot.perSlotCount,
+        perPersonMaxRegistration: slot.perPersonMaxRegistration,
+        weeklySchedule: slot.weeklySchedule,
+        timeSlots: slot.timeSlots,
         isActive: slot.isActive,
         createdAt: slot.createdAt.toISOString(),
         updatedAt: slot.updatedAt.toISOString(),
@@ -518,13 +524,31 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Service provider profile not found', 400);
     }
 
-    const { serviceId, fromDate, toDate, dailyCount } = req.body;
+    const {
+      serviceId,
+      fromDate,
+      toDate,
+      dailyCount,
+      weeklySchedule,
+      timeSlots,
+      slotIntervalMinutes,
+      perSlotCount,
+      perPersonMaxRegistration,
+      intervalEnabled,
+    } = req.body;
 
-    if (!serviceId || !fromDate || !toDate || dailyCount === undefined) {
+    if (intervalEnabled !== undefined && typeof intervalEnabled !== 'boolean') {
+      throw new AppError('Interval enabled must be a boolean', 400);
+    }
+    if (intervalEnabled === true && weeklySchedule == null) {
+      throw new AppError('A weekday schedule is required when interval slots are enabled', 400);
+    }
+
+    if (!serviceId || !fromDate || !toDate || (dailyCount === undefined && perSlotCount === undefined)) {
       throw new AppError('Missing required fields', 400);
     }
 
-    const dc = parseInt(dailyCount.toString());
+    const dc = Number(dailyCount ?? perSlotCount);
     if (isNaN(dc) || dc < 1) {
       throw new AppError('Daily count must be at least 1', 400);
     }
@@ -573,18 +597,50 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('To date must be greater than or equal to from date', 400);
     }
 
-    const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dc * days;
+    let schedule;
+    try {
+      schedule = intervalEnabled === false ? null : normalizeSlotSchedule({
+          weeklySchedule,
+          timeSlots,
+          slotIntervalMinutes,
+          perSlotCount: perSlotCount ?? dc,
+          perPersonMaxRegistration,
+        });
+    } catch (error) {
+      if (error instanceof SlotScheduleError) throw new AppError(error.message, 400);
+      throw error;
+    }
+    const counts = calculateScheduleCounts(start, end, dc, schedule);
+    if (counts.totalCount < 1) {
+      throw new AppError('The selected date range contains no available working time slots', 400);
+    }
 
-    const slot = await prisma.serviceSlot.create({
-      data: {
-        serviceId,
-        startDate: start,
-        endDate: end,
-        dailyCount: dc,
-        totalCount,
-        isActive: true,
-      },
+    const slot = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Service" WHERE "id" = ${serviceId} FOR UPDATE`);
+      const duplicate = await tx.serviceSlot.findFirst({
+        where: { serviceId, isDeleted: false },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new AppError('This service already has a slot. Edit the existing slot instead.', 409);
+      }
+      return tx.serviceSlot.create({
+        data: {
+          serviceId,
+          startDate: start,
+          endDate: end,
+          dailyCount: counts.dailyCount,
+          totalCount: counts.totalCount,
+          ...(schedule ? {
+            slotIntervalMinutes: schedule.slotIntervalMinutes,
+            perSlotCount: schedule.perSlotCount,
+            perPersonMaxRegistration: schedule.perPersonMaxRegistration,
+            weeklySchedule: schedule.weeklySchedule as unknown as Prisma.InputJsonValue,
+            timeSlots: schedule.timeSlots as unknown as Prisma.InputJsonValue,
+          } : {}),
+          isActive: true,
+        },
+      });
     });
 
     res.status(201).json({
@@ -596,10 +652,15 @@ export const createSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: slot.endDate.toISOString().split('T')[0],
         dailyCount: slot.dailyCount,
         totalCount: slot.totalCount,
+        slotIntervalMinutes: slot.slotIntervalMinutes,
+        perSlotCount: slot.perSlotCount,
+        perPersonMaxRegistration: slot.perPersonMaxRegistration,
+        weeklySchedule: slot.weeklySchedule,
+        timeSlots: slot.timeSlots,
         createdAt: slot.createdAt.toISOString(),
         updatedAt: slot.updatedAt.toISOString(),
       },
-      totalCount
+      totalCount: counts.totalCount,
     });
   } catch (error) {
     next(error);
@@ -614,13 +675,28 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Service provider profile not found', 400);
     }
 
-    const { slotId, dailyCount, fromDate, toDate } = req.body;
+    const {
+      slotId,
+      dailyCount,
+      fromDate,
+      toDate,
+      weeklySchedule,
+      timeSlots,
+      slotIntervalMinutes,
+      perSlotCount,
+      perPersonMaxRegistration,
+      intervalEnabled,
+    } = req.body;
+
+    if (intervalEnabled !== undefined && typeof intervalEnabled !== 'boolean') {
+      throw new AppError('Interval enabled must be a boolean', 400);
+    }
 
     if (!slotId || dailyCount === undefined) {
       throw new AppError('Missing required fields', 400);
     }
 
-    const dc = parseInt(dailyCount.toString());
+    const dc = Number(dailyCount);
     if (isNaN(dc) || dc < 1) {
       throw new AppError('Daily count must be at least 1', 400);
     }
@@ -640,6 +716,10 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('Slot not found or unauthorized', 404);
     }
 
+    if (intervalEnabled === true && weeklySchedule == null && slot.weeklySchedule == null) {
+      throw new AppError('A weekday schedule is required when interval slots are enabled', 400);
+    }
+
     const start = fromDate ? new Date(fromDate) : new Date(slot.startDate);
     const end = toDate ? new Date(toDate) : new Date(slot.endDate);
 
@@ -651,16 +731,53 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
       throw new AppError('End date must be on or after start date', 400);
     }
 
-    const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    const totalCount = dc * days;
+    let schedule;
+    let timeSlotInput = timeSlots ?? slot.timeSlots;
+    const scheduleDefinitionChanged = weeklySchedule !== undefined ||
+      slotIntervalMinutes !== undefined || perSlotCount !== undefined;
+    if (timeSlots === undefined && scheduleDefinitionChanged) {
+      timeSlotInput = undefined;
+    } else if (timeSlots === undefined && weeklySchedule === undefined &&
+        slotIntervalMinutes === undefined && perSlotCount === undefined &&
+        dailyCount !== slot.dailyCount && slot.weeklySchedule != null) {
+      timeSlotInput = redistributeDailyCapacity(slot.timeSlots, dc);
+    }
+    try {
+      schedule = intervalEnabled === false ? null : normalizeSlotSchedule({
+          weeklySchedule: weeklySchedule ?? slot.weeklySchedule,
+          timeSlots: timeSlotInput,
+          slotIntervalMinutes: slotIntervalMinutes ?? slot.slotIntervalMinutes,
+          perSlotCount: perSlotCount ?? slot.perSlotCount,
+          perPersonMaxRegistration: perPersonMaxRegistration ?? slot.perPersonMaxRegistration,
+        });
+    } catch (error) {
+      if (error instanceof SlotScheduleError) throw new AppError(error.message, 400);
+      throw error;
+    }
+    const counts = calculateScheduleCounts(start, end, dc, schedule);
+    if (counts.totalCount < 1) {
+      throw new AppError('The selected date range contains no available working time slots', 400);
+    }
 
     const updated = await prisma.serviceSlot.update({
       where: { id: slotId },
       data: {
         startDate: start,
         endDate: end,
-        dailyCount: dc,
-        totalCount
+        dailyCount: counts.dailyCount,
+        totalCount: counts.totalCount,
+        ...(schedule ? {
+          slotIntervalMinutes: schedule.slotIntervalMinutes,
+          perSlotCount: schedule.perSlotCount,
+          perPersonMaxRegistration: schedule.perPersonMaxRegistration,
+          weeklySchedule: schedule.weeklySchedule as unknown as Prisma.InputJsonValue,
+          timeSlots: schedule.timeSlots as unknown as Prisma.InputJsonValue,
+        } : intervalEnabled === false ? {
+          slotIntervalMinutes: 60,
+          perSlotCount: 1,
+          weeklySchedule: Prisma.DbNull,
+          timeSlots: Prisma.DbNull,
+        } : {}),
       },
     });
 
@@ -684,10 +801,15 @@ export const updateSpSlot = async (req: AuthRequest, res: Response, next: NextFu
         toDate: updated.endDate.toISOString().split('T')[0],
         dailyCount: updated.dailyCount,
         totalCount: updated.totalCount,
+        slotIntervalMinutes: updated.slotIntervalMinutes,
+        perSlotCount: updated.perSlotCount,
+        perPersonMaxRegistration: updated.perPersonMaxRegistration,
+        weeklySchedule: updated.weeklySchedule,
+        timeSlots: updated.timeSlots,
         createdAt: updated.createdAt.toISOString(),
         updatedAt: updated.updatedAt.toISOString(),
       },
-      totalCount
+      totalCount: counts.totalCount,
     });
   } catch (error) {
     next(error);

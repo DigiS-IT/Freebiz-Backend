@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { AppError, generateBookingCode, generateQRData, paginate } from '../utils/helpers';
 import { generateQRCode } from '../utils/qr-generator';
 import { AuthRequest } from '../middlewares/auth.middleware';
+import { getSlotCapacityForDate } from '../utils/slot-schedule';
 
 // ============================================
 // CREATE BOOKING
@@ -12,6 +13,11 @@ import { AuthRequest } from '../middlewares/auth.middleware';
 export const createBooking = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { serviceId, bookingDate } = req.body;
+    const requestedTimeStart = req.body.bookingTimeStart as string | undefined;
+    const registrationCount = Number(req.body.registrationCount ?? 1);
+    if (!Number.isInteger(registrationCount) || registrationCount < 1) {
+      throw new AppError('Registration count must be a positive whole number', 400);
+    }
     const customerId = req.user!.id;
 
     const transaction = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -42,17 +48,27 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
         throw new AppError('This service is currently unavailable', 400);
       }
 
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Service" WHERE "id" = ${serviceId} FOR UPDATE`);
+
       // Check if booking date is within an active slot
       let slot = await tx.serviceSlot.findFirst({
         where: {
           serviceId,
           isActive: true,
+          isDeleted: false,
           startDate: { lte: new Date(bookingDate) },
           endDate: { gte: new Date(bookingDate) },
         },
       });
 
       if (!slot) {
+        const configuredSlot = await tx.serviceSlot.findFirst({
+          where: { serviceId, isDeleted: false },
+          select: { id: true },
+        });
+        if (configuredSlot) {
+          throw new AppError('This service is outside its configured availability dates', 400);
+        }
         // Auto-provision a default 1-year slot with dailyCount 50 so service is bookable immediately
         const defaultStart = new Date(bookingDate);
         defaultStart.setDate(defaultStart.getDate() - 30);
@@ -69,6 +85,14 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
           },
         });
       }
+
+      if (registrationCount > slot.perPersonMaxRegistration) {
+        throw new AppError(`You can register at most ${slot.perPersonMaxRegistration} people for this service`, 400);
+      }
+
+      // Serialize reservations for this service slot to prevent concurrent requests
+      // from both claiming the same remaining capacity.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ServiceSlot" WHERE "id" = ${slot.id} FOR UPDATE`);
 
       // Check max 2 bookings per day per customer
       const todayBookingsCount = await tx.booking.count({
@@ -97,16 +121,68 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
         throw new AppError('You have already booked this service for this date', 400);
       }
 
-      // Check available slots for the date
-      const bookedCountForDate = await tx.booking.count({
+      // Respect the provider's weekday schedule and generated interval capacity.
+      const dateCapacity = getSlotCapacityForDate(slot, new Date(bookingDate));
+      if (dateCapacity <= 0) {
+        throw new AppError('This service is not available on the selected date', 400);
+      }
+
+      let bookingTimeStart: string | null = null;
+      let bookingTimeEnd: string | null = null;
+      if (Array.isArray(slot.weeklySchedule) && Array.isArray(slot.timeSlots)) {
+        const weekday = new Date(bookingDate).getUTCDay();
+        const dayOptions = (slot.timeSlots as any[])
+          .filter((item) => item.weekday === weekday && Number(item.capacity) > 0)
+          .sort((a, b) => a.startTime.localeCompare(b.startTime));
+        const reservations = await tx.booking.groupBy({
+          by: ['bookingTimeStart'],
+          where: {
+            slotId: slot.id,
+            bookingDate: new Date(bookingDate),
+            status: { not: 'CANCELLED' },
+          },
+          _sum: { registrationCount: true },
+        });
+        const reservedByTime = new Map(
+          reservations.map((item) => [item.bookingTimeStart ?? '', item._sum.registrationCount ?? 0]),
+        );
+        let unassignedReservations = reservedByTime.get('') ?? 0;
+        for (const option of dayOptions) {
+          const previouslyAssigned = Math.min(Number(option.capacity), unassignedReservations);
+          unassignedReservations -= previouslyAssigned;
+          reservedByTime.set(
+            option.startTime,
+            (reservedByTime.get(option.startTime) ?? 0) + previouslyAssigned,
+          );
+        }
+        const chosen = requestedTimeStart
+          ? dayOptions.find((item) => item.startTime === requestedTimeStart)
+          : dayOptions.find((item) =>
+              Number(item.capacity) - (reservedByTime.get(item.startTime) ?? 0) >= registrationCount,
+            );
+        if (!chosen) {
+          throw new AppError('The selected time is not available. Please choose another time.', 400);
+        }
+        const reservedAtTime = reservedByTime.get(chosen.startTime) ?? 0;
+        if (reservedAtTime + registrationCount > Number(chosen.capacity)) {
+          throw new AppError('There are not enough registrations available for this time', 400);
+        }
+        bookingTimeStart = chosen.startTime;
+        bookingTimeEnd = chosen.endTime;
+      }
+
+      // Check available capacity for the selected date.
+      const bookedCountForDate = await tx.booking.aggregate({
         where: {
           slotId: slot.id,
           bookingDate: new Date(bookingDate),
           status: { not: 'CANCELLED' },
         },
+        _sum: { registrationCount: true },
       });
 
-      if (bookedCountForDate >= slot.dailyCount) {
+      const reservedCount = bookedCountForDate._sum.registrationCount ?? 0;
+      if (reservedCount + registrationCount > dateCapacity) {
         throw new AppError('No slots available for the selected date', 400);
       }
 
@@ -121,6 +197,9 @@ export const createBooking = async (req: AuthRequest, res: Response, next: NextF
           serviceId,
           slotId: slot.id,
           bookingDate: new Date(bookingDate),
+          registrationCount,
+          bookingTimeStart,
+          bookingTimeEnd,
           status: 'BOOKED',
         },
         include: {

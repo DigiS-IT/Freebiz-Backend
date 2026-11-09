@@ -896,17 +896,78 @@ export const getCustomers = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
-// Booking report for Super Admin, optionally filtered by service provider.
+// Booking report for Super Admin, filtered by service provider, date of booking, and/or status.
 export const getBookingReport = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const providerId = typeof req.query.providerId === 'string' ? req.query.providerId : undefined;
+    const providerId = typeof req.query.providerId === 'string' && req.query.providerId !== 'all' ? req.query.providerId : undefined;
+    const fromDate = typeof req.query.fromDate === 'string' && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === 'string' && req.query.toDate ? req.query.toDate : undefined;
+    const singleDate = typeof req.query.date === 'string' && req.query.date ? req.query.date : undefined;
+    const dateType = typeof req.query.dateType === 'string' && req.query.dateType === 'createdAt' ? 'createdAt' : 'bookingDate';
+    const statusParam = typeof req.query.status === 'string' ? req.query.status.toLowerCase() : undefined;
+
+    const where: any = {};
+
+    // Provider filter
+    if (providerId) {
+      where.service = { serviceProviderId: providerId };
+    }
+
+    // Status filter
+    if (statusParam && statusParam !== 'all') {
+      if (statusParam === 'active') {
+        where.status = { in: [BookingStatus.BOOKED, BookingStatus.USED] };
+      } else {
+        const upper = statusParam.toUpperCase();
+        if (Object.values(BookingStatus).includes(upper as BookingStatus)) {
+          where.status = upper as BookingStatus;
+        }
+      }
+    } else if (!statusParam) {
+      // Default: booked and used bookings
+      where.status = { in: [BookingStatus.BOOKED, BookingStatus.USED] };
+    }
+
+    // Date filter: either bookingDate (date of booking) or createdAt (when booking was placed)
+    if (dateType === 'bookingDate') {
+      if (singleDate) {
+        where.bookingDate = new Date(singleDate);
+      } else if (fromDate || toDate) {
+        where.bookingDate = {};
+        if (fromDate) {
+          where.bookingDate.gte = new Date(fromDate);
+        }
+        if (toDate) {
+          where.bookingDate.lte = new Date(toDate);
+        }
+      }
+    } else {
+      // createdAt filter
+      if (singleDate) {
+        const start = new Date(singleDate);
+        start.setUTCHours(0, 0, 0, 0);
+        const end = new Date(singleDate);
+        end.setUTCHours(23, 59, 59, 999);
+        where.createdAt = { gte: start, lte: end };
+      } else if (fromDate || toDate) {
+        where.createdAt = {};
+        if (fromDate) {
+          const start = new Date(fromDate);
+          start.setUTCHours(0, 0, 0, 0);
+          where.createdAt.gte = start;
+        }
+        if (toDate) {
+          const end = new Date(toDate);
+          end.setUTCHours(23, 59, 59, 999);
+          where.createdAt.lte = end;
+        }
+      }
+    }
+
     const bookings = await prisma.booking.findMany({
-      where: {
-        status: { in: [BookingStatus.BOOKED, BookingStatus.USED] },
-        ...(providerId ? { service: { serviceProviderId: providerId } } : {}),
-      },
+      where,
       include: {
-        customer: { include: { user: { select: { phone: true } } } },
+        customer: { include: { user: { select: { phone: true, email: true } } } },
         service: { include: { serviceProvider: { select: { id: true, businessName: true } } } },
         slot: { select: { startDate: true, endDate: true } },
       },
@@ -915,20 +976,33 @@ export const getBookingReport = async (req: Request, res: Response, next: NextFu
 
     res.status(200).json({
       success: true,
-      bookings: bookings.map((booking) => ({
-        id: booking.id,
-        bookingCode: booking.bookingCode,
-        status: booking.status.toLowerCase(),
-        customerName: booking.customer.name || 'Customer',
-        customerPhone: booking.customer.user?.phone || 'No phone',
-        serviceName: booking.service.serviceDetail,
-        serviceType: booking.service.serviceType.toLowerCase(),
-        providerId: booking.service.serviceProvider.id,
-        providerName: booking.service.serviceProvider.businessName,
-        bookingDate: booking.bookingDate.toISOString().slice(0, 10),
-        offerStartDate: booking.slot.startDate.toISOString().slice(0, 10),
-        offerEndDate: booking.slot.endDate.toISOString().slice(0, 10),
-      })),
+      count: bookings.length,
+      bookings: bookings.map((booking) => {
+        const startTime = booking.bookingTimeStart;
+        const endTime = booking.bookingTimeEnd;
+        const timeSlot = startTime && endTime ? startTime + ' - ' + endTime : (startTime || 'Full Day');
+
+        return {
+          id: booking.id,
+          bookingCode: booking.bookingCode,
+          status: booking.status.toLowerCase(),
+          customerName: booking.customer?.name || 'Customer',
+          customerPhone: booking.customer?.user?.phone || 'No phone',
+          customerEmail: booking.customer?.user?.email || null,
+          serviceName: booking.service?.serviceDetail || 'Service',
+          serviceType: (booking.service?.serviceType || 'FREE').toLowerCase(),
+          providerId: booking.service?.serviceProvider?.id || '',
+          providerName: booking.service?.serviceProvider?.businessName || 'Service Provider',
+          bookingDate: booking.bookingDate ? booking.bookingDate.toISOString().slice(0, 10) : '',
+          bookingTimeStart: startTime || null,
+          bookingTimeEnd: endTime || null,
+          timeSlot,
+          registrationCount: booking.registrationCount || 1,
+          bookedAt: booking.createdAt ? booking.createdAt.toISOString() : '',
+          offerStartDate: booking.slot?.startDate ? booking.slot.startDate.toISOString().slice(0, 10) : '',
+          offerEndDate: booking.slot?.endDate ? booking.slot.endDate.toISOString().slice(0, 10) : '',
+        };
+      }),
     });
   } catch (error) {
     next(error);

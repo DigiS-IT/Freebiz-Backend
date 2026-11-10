@@ -1,4 +1,4 @@
-import admin from '../config/firebase';
+import { getFirebaseMessaging } from '../config/firebase';
 
 export const sendPushNotification = async (
   token: string,
@@ -16,7 +16,7 @@ export const sendPushNotification = async (
       token,
     };
 
-    const response = await admin.messaging().send(message);
+    const response = await getFirebaseMessaging().send(message);
     console.log('Successfully sent message:', response);
   } catch (error) {
     console.error('Error sending push notification:', error);
@@ -39,7 +39,7 @@ export const sendToTopic = async (
       topic,
     };
 
-    const response = await admin.messaging().send(message);
+    const response = await getFirebaseMessaging().send(message);
     console.log('Successfully sent message to topic:', response);
   } catch (error) {
     console.error('Error sending topic notification:', error);

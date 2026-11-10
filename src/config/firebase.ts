@@ -1,21 +1,21 @@
-import admin from 'firebase-admin';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getMessaging } from 'firebase-admin/messaging';
 import serviceAccount from './freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json';
 
 export const initializeFirebase = () => {
-  try {
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount as any),
-      });
-      console.log('✅ Firebase Admin SDK initialized using local service account file');
-    }
-  } catch (error) {
-    console.error('❌ Failed to initialize Firebase:', error);
-  }
+  const existingApp = getApps()[0];
+  if (existingApp) return existingApp;
+
+  const app = initializeApp({
+    credential: cert(serviceAccount as any),
+  });
+  console.log('✅ Firebase Admin SDK initialized using local service account file');
+  return app;
 };
 
-export { admin };
-export default admin;
+export const getFirebaseAuth = () => getAuth(initializeFirebase());
+export const getFirebaseMessaging = () => getMessaging(initializeFirebase());
 
 export const sendPushNotification = async (token: string, title: string, body: string, data?: any) => {
   try {
@@ -25,7 +25,7 @@ export const sendPushNotification = async (token: string, title: string, body: s
       token: token,
     };
 
-    const response = await admin.messaging().send(message);
+    const response = await getFirebaseMessaging().send(message);
     return response;
   } catch (error) {
     console.error('❌ Failed to send push notification:', error);

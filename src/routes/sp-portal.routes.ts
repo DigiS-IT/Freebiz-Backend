@@ -10,6 +10,7 @@ const router: Router = Router();
 router.get('/dashboard', authenticate, spOnly, spController.getSpDashboard);
 router.get('/stats', authenticate, spOnly, spController.getSpStats);
 router.get('/bookings', authenticate, spOnly, spController.getSpBookings);
+router.post('/bookings/:id/cancel', authenticate, spOnly, spController.cancelSpBooking);
 
 // Profile setup and management
 router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpProfile);

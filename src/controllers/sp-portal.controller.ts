@@ -238,6 +238,48 @@ export const getSpBookings = async (req: AuthRequest, res: Response, next: NextF
   }
 };
 
+// Cancel a customer booking on behalf of the authenticated service provider.
+export const cancelSpBooking = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    const bookingId = req.params.id;
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+
+    if (!spId) throw new AppError('Service provider profile not found', 400);
+    if (!reason) throw new AppError('Cancellation reason is required', 400);
+
+    const result = await prisma.booking.updateMany({
+      where: {
+        id: bookingId,
+        status: 'BOOKED',
+        service: { serviceProviderId: spId },
+      },
+      data: {
+        status: 'CANCELLED',
+        cancellationReason: reason,
+        cancelledAt: new Date(),
+      },
+    });
+
+    if (result.count === 0) {
+      const booking = await prisma.booking.findFirst({
+        where: { id: bookingId, service: { serviceProviderId: spId } },
+        select: { status: true },
+      });
+      if (!booking) throw new AppError('Booking not found or unauthorized', 404);
+      throw new AppError('Only active bookings can be cancelled', 409);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Booking cancelled successfully',
+      data: { id: bookingId, status: 'CANCELLED', cancellationReason: reason },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Create Service Provider Business Profile
 export const createSpProfile = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

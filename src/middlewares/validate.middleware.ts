@@ -9,8 +9,9 @@ export const validateRequest = (schema: ZodSchema) => {
       const result = schema.safeParse(source);
 
       if (!result.success) {
-        const errors = result.error.errors.map((err) => ({
-          field: err.path.join('.'),
+        const issues = (result.error as any).issues || (result.error as any).errors || [];
+        const errors = issues.map((err: any) => ({
+          field: Array.isArray(err.path) ? err.path.join('.') : String(err.path || ''),
           message: err.message,
         }));
 

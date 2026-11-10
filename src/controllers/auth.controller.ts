@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma';
 import { AppError, generateOtp } from '../utils/helpers';
 import { AuthRequest } from '../middlewares/auth.middleware';
 import { sendSms } from '../config/sms';
-import { admin } from '../config/firebase';
+import { getFirebaseAuth } from '../config/firebase';
 import { sendMail } from '../utils/mail';
 
 // ============================================
@@ -92,13 +92,8 @@ export const verifyOtp = async (req: Request, res: Response, next: NextFunction)
 
     // Check if OTP is a Firebase ID Token (starts with JWT header 'eyJ')
     if (otp && otp.startsWith('eyJ')) {
-      // Initialize Firebase if not already initialized
-      if (!admin.apps.length) {
-        throw new AppError('Firebase Admin SDK is not initialized', 500);
-      }
-
       // Verify Firebase ID Token
-      const decodedToken = await admin.auth().verifyIdToken(otp);
+      const decodedToken = await getFirebaseAuth().verifyIdToken(otp);
       const rawPhone = decodedToken.phone_number || '';
       
       if (!rawPhone) {

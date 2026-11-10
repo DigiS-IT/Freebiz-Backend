@@ -1,18 +1,13 @@
-import * as admin from 'firebase-admin';
-import serviceAccount from '../config/freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json';
+import { getFirebaseMessaging, initializeFirebase } from '../config/firebase';
 
 class FirebaseService {
-  private messaging: admin.messaging.Messaging | null = null;
+  private messaging: any = null;
 
   constructor() {
     try {
-      if (!admin.apps.length) {
-        admin.initializeApp({
-          credential: admin.credential.cert(serviceAccount as any),
-        });
-      }
-      this.messaging = admin.messaging();
-      console.log('✅ Firebase Admin SDK initialized in FirebaseService using local file');
+      initializeFirebase();
+      this.messaging = getFirebaseMessaging();
+      console.log('✅ Firebase Admin SDK messaging initialized');
     } catch (error) {
       console.error('❌ Failed to initialize Firebase Admin SDK:', error);
     }
@@ -51,4 +46,4 @@ class FirebaseService {
   }
 }
 
-export default new FirebaseService();
+export const firebaseService = new FirebaseService();

@@ -653,10 +653,29 @@ export const magicLogin = async (req: Request, res: Response, next: NextFunction
     });
 
     // Build the frontend Magic Link verification URL
-    let frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    if (frontendUrl.includes(',')) {
-      frontendUrl = frontendUrl.split(',')[0].trim();
+    const configuredOrigins = (process.env.FRONTEND_URL || 'http://localhost:3001')
+      .split(',')
+      .map((u) => u.trim().replace(/\/+$/, ''));
+
+    // Dynamically detect caller's frontend origin from request headers (e.g. http://localhost:3001)
+    const reqOrigin = (req.headers.origin as string | undefined)?.replace(/\/+$/, '');
+    let refererOrigin: string | undefined;
+    if (req.headers.referer) {
+      try {
+        refererOrigin = new URL(req.headers.referer as string).origin;
+      } catch {}
     }
+
+    const candidateOrigin = reqOrigin || refererOrigin;
+    const isAllowedOrigin = candidateOrigin && (
+      configuredOrigins.includes(candidateOrigin) ||
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(candidateOrigin)
+    );
+
+    const frontendUrl = isAllowedOrigin
+      ? candidateOrigin
+      : (configuredOrigins.find((o) => o.includes('localhost:3001')) || configuredOrigins[0] || 'http://localhost:3001');
+
     const magicLink = `${frontendUrl}/login/magic-verify?token=${token}`;
 
     // Send the email using the local custom template

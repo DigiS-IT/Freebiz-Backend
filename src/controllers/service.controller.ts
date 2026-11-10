@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import {
   AppError,
@@ -34,8 +35,17 @@ export const getServices = async (
       limit = "20",
     } = req.query;
 
-    // Build where clause
-    const where: any = {
+    // Normalize values coming from mobile clients. Older app versions may send
+    // lowercase service types or use "DEAL" for discounted services.
+    const requestedType = String(serviceType ?? "").trim().toUpperCase();
+    const normalizedType =
+      requestedType === "DEAL" || requestedType === "DISCOUNT"
+        ? "DISCOUNTED"
+        : requestedType;
+
+    // Build where clause. Keep each group in AND so adding search/city filters
+    // cannot replace the availability/date conditions above it.
+    const where: Prisma.ServiceWhereInput = {
       isActive: true,
       isDeleted: false,
       serviceMode: "IN_PERSON",
@@ -50,7 +60,7 @@ export const getServices = async (
     // Filter out expired services and those not started yet
     const todayStr = new Date().toISOString().split("T")[0];
     const todayDate = new Date(todayStr);
-    where.AND = [
+    const andFilters: Prisma.ServiceWhereInput[] = [
       {
         OR: [{ endDate: null }, { endDate: { gte: todayDate } }],
       },
@@ -60,9 +70,9 @@ export const getServices = async (
     ];
 
     // Filter by service type
-    if (serviceType === "FREE") {
+    if (normalizedType === "FREE") {
       where.serviceType = "FREE";
-    } else if (serviceType === "DISCOUNTED") {
+    } else if (normalizedType === "DISCOUNTED") {
       where.serviceType = "DISCOUNTED";
 
       // Filter by discount percentage range
@@ -83,27 +93,43 @@ export const getServices = async (
     // discovery requests (where the customer has no coordinates).
     const hasCoordinates = latitude !== undefined && longitude !== undefined;
     if (city && !hasCoordinates) {
-      const selectedCity = (city as string).trim();
-      const normalizedCity = selectedCity.toLowerCase();
-      const cityNames =
-        normalizedCity === "bangalore" || normalizedCity === "bengaluru"
-          ? ["Bengaluru", "Bangalore"]
-          : [selectedCity];
-      where.city = { in: cityNames, mode: "insensitive" };
+      const selectedCity = String(city).trim();
+      if (selectedCity) {
+        const normalizedCity = selectedCity.toLowerCase();
+        const cityNames =
+          normalizedCity === "bangalore" || normalizedCity === "bengaluru"
+            ? [
+                "Bengaluru",
+                "Bangalore",
+                "Bangalore (Bengaluru)",
+                "Bengaluru (Bangalore)",
+              ]
+            : [selectedCity];
+        andFilters.push({
+          OR: cityNames.map((name) => ({
+            city: { contains: name, mode: "insensitive" as const },
+          })),
+        });
+      }
     }
 
     // Search by SP name or location
-    if (search) {
-      where.OR = [
+    if (search && String(search).trim()) {
+      const searchTerm = String(search).trim();
+      andFilters.push({
+        OR: [
         {
           serviceProvider: {
-            businessName: { contains: search as string, mode: "insensitive" },
+              businessName: { contains: searchTerm, mode: "insensitive" },
           },
         },
-        { address: { contains: search as string, mode: "insensitive" } },
-        { city: { contains: search as string, mode: "insensitive" } },
-      ];
+          { address: { contains: searchTerm, mode: "insensitive" } },
+          { city: { contains: searchTerm, mode: "insensitive" } },
+        ],
+      });
     }
+
+    where.AND = andFilters;
 
     let serviceIds: string[] | null = null;
     let distanceMap: Record<

@@ -1,8 +1,8 @@
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 import serviceAccount from '../config/freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json';
 
 class FirebaseService {
-  private messaging: admin.messaging.Messaging | null = null;
+  private messaging: any = null;
 
   constructor() {
     try {
@@ -51,4 +51,4 @@ class FirebaseService {
   }
 }
 
-export default new FirebaseService();
+export const firebaseService = new FirebaseService();

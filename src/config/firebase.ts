@@ -1,4 +1,4 @@
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 import serviceAccount from './freebiz-615bd-firebase-adminsdk-fbsvc-bc2bb7de63.json';
 
 export const initializeFirebase = () => {

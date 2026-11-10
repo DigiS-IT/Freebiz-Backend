@@ -21,10 +21,10 @@ export const createServiceSchema = z.object({
   latitude: z.number(),
   longitude: z.number(),
   specialInstructions: z
-    .string({ required_error: "Special instructions are mandatory" })
+    .string()
     .min(1, "Special instructions are mandatory"),
   termsAndConditions: z
-    .string({ required_error: "Terms and conditions are mandatory" })
+    .string()
     .min(1, "Terms and conditions are mandatory"),
   actualPrice: z.number().optional().nullable(),
   discountedPrice: z.number().optional().nullable(),

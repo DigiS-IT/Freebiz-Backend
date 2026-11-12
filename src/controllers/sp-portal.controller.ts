@@ -228,7 +228,13 @@ export const getSpBookings = async (req: AuthRequest, res: Response, next: NextF
             user: { select: { phone: true, email: true } }
           }
         },
-        service: true
+        service: true,
+        qrCode: {
+          select: {
+            isUsed: true,
+            scannedAt: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' }
     });

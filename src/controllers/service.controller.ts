@@ -482,6 +482,7 @@ export const getServiceById = async (
     }
 
     for (const slot of service.slots) {
+      const slotAny = slot as any;
       const start = new Date(slot.startDate);
       const end = new Date(slot.endDate);
       const todayUtc = Date.parse(`${today}T00:00:00.000Z`);
@@ -491,7 +492,7 @@ export const getServiceById = async (
       ));
       const slotEndUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
       const endUtc = Math.min(slotEndUtc, todayUtc + 89 * 86_400_000);
-      const bookedRows = await prisma.booking.groupBy({
+      const bookedRows = await (prisma.booking as any).groupBy({
         by: ['bookingDate', 'bookingTimeStart'],
         where: {
           slotId: slot.id,
@@ -502,9 +503,9 @@ export const getServiceById = async (
       });
       const bookedByDate = new Map<string, number>();
       const bookedByTime = new Map<string, number>();
-      for (const row of bookedRows) {
-        const date = row.bookingDate.toISOString().slice(0, 10);
-        const reserved = row._sum.registrationCount ?? 0;
+      for (const row of (bookedRows as any[])) {
+        const date = (row.bookingDate as Date).toISOString().slice(0, 10);
+        const reserved = (row._sum?.registrationCount ?? 0) as number;
         bookedByDate.set(date, (bookedByDate.get(date) ?? 0) + reserved);
         const key = `${date}|${row.bookingTimeStart ?? ''}`;
         bookedByTime.set(key, (bookedByTime.get(key) ?? 0) + reserved);
@@ -513,10 +514,10 @@ export const getServiceById = async (
       while (current.getTime() <= endUtc) {
         const dateStr = current.toISOString().split("T")[0];
         const bookedCount = bookedByDate.get(dateStr) ?? 0;
-        const capacity = getSlotCapacityForDate(slot, current);
-        if (Array.isArray(slot.timeSlots) && Array.isArray(slot.weeklySchedule)) {
+        const capacity = getSlotCapacityForDate(slotAny, current);
+        if (Array.isArray(slotAny.timeSlots) && Array.isArray(slotAny.weeklySchedule)) {
           let unassignedBookings = bookedByTime.get(`${dateStr}|`) ?? 0;
-          const daySlots = (slot.timeSlots as any[])
+          const daySlots = (slotAny.timeSlots as any[])
             .filter((item) => item.weekday === current.getUTCDay())
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
           const options = daySlots.map((item) => {
@@ -567,7 +568,7 @@ export const getServiceById = async (
           .filter(Boolean),
         availableDates,
         availableTimeSlots,
-        perPersonMaxRegistration: service.slots[0]?.perPersonMaxRegistration ?? 1,
+        perPersonMaxRegistration: (service.slots[0] as any)?.perPersonMaxRegistration ?? 1,
         subServices: (service as any).subServices
           ? (service as any).subServices.map((sub: any) => ({
               id: sub.id,

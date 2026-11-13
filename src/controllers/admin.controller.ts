@@ -737,6 +737,13 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       throw new AppError('spId is required', 400);
     }
 
+    const existingProfile = await prisma.serviceProviderProfile.findUnique({
+      where: { id: spId },
+    });
+    if (!existingProfile) {
+      throw new AppError('Service Provider profile not found', 404);
+    }
+
     const updateData: any = {};
 
     if (isActive !== undefined) {
@@ -744,20 +751,81 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       updateData.disabledAt = isActive ? null : new Date();
     }
 
-    if (businessName !== undefined && businessName !== null) updateData.businessName = businessName.trim();
-    if (businessEmail !== undefined && businessEmail !== null) updateData.businessEmail = businessEmail.trim();
-    if (profilePic !== undefined) updateData.profilePic = profilePic && typeof profilePic === 'string' ? profilePic.trim() : null;
-    if (primaryContact !== undefined && primaryContact !== null) updateData.primaryContact = primaryContact.trim();
-    if (secondaryContact !== undefined && secondaryContact !== null) updateData.secondaryContact = secondaryContact.trim();
-    if (address !== undefined && address !== null) updateData.address = address.trim();
-    if (city !== undefined && city !== null) updateData.city = city.trim();
-    if (latitude !== undefined && latitude !== null && latitude !== '') updateData.latitude = parseFloat(latitude.toString());
-    if (longitude !== undefined && longitude !== null && longitude !== '') updateData.longitude = parseFloat(longitude.toString());
+    if (businessName !== undefined && businessName !== null) {
+      updateData.businessName = businessName.trim();
+    }
+
+    let cleanEmail: string | null | undefined = undefined;
+    if (businessEmail !== undefined) {
+      cleanEmail = businessEmail && typeof businessEmail === 'string' && businessEmail.trim()
+        ? businessEmail.trim().toLowerCase()
+        : null;
+      updateData.businessEmail = cleanEmail;
+    }
+
+    if (profilePic !== undefined) {
+      updateData.profilePic = profilePic && typeof profilePic === 'string' && profilePic.trim()
+        ? profilePic.trim()
+        : null;
+    }
+
+    let cleanPrimary: string | null | undefined = undefined;
+    if (primaryContact !== undefined && primaryContact !== null) {
+      const rawPrimary = primaryContact.toString().trim();
+      const digits = rawPrimary.replace(/\D/g, '').slice(-10);
+      cleanPrimary = digits.length === 10 ? digits : (rawPrimary || null);
+      updateData.primaryContact = cleanPrimary;
+    }
+
+    if (secondaryContact !== undefined) {
+      const rawSecondary = secondaryContact ? secondaryContact.toString().trim() : '';
+      const digits = rawSecondary.replace(/\D/g, '').slice(-10);
+      updateData.secondaryContact = digits.length === 10 ? digits : (rawSecondary || null);
+    }
+
+    if (address !== undefined && address !== null) {
+      updateData.address = address.toString().trim();
+    }
+
+    if (city !== undefined && city !== null) {
+      updateData.city = city.toString().trim();
+    }
+
+    if (latitude !== undefined && latitude !== null && latitude !== '') {
+      const parsedLat = parseFloat(latitude.toString());
+      if (!isNaN(parsedLat)) updateData.latitude = parsedLat;
+    }
+
+    if (longitude !== undefined && longitude !== null && longitude !== '') {
+      const parsedLng = parseFloat(longitude.toString());
+      if (!isNaN(parsedLng)) updateData.longitude = parsedLng;
+    }
 
     const updated = await prisma.serviceProviderProfile.update({
       where: { id: spId },
       data: updateData,
     });
+
+    // Locate the primary SP admin account
+    const spAdminUser = await prisma.user.findFirst({
+      where: {
+        serviceProviderId: spId,
+        role: UserRole.SP_SUPER_ADMIN,
+      },
+    }) || await prisma.user.findFirst({
+      where: {
+        serviceProviderId: spId,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Sync active status with User login records if isActive provided
+    if (isActive !== undefined) {
+      await prisma.user.updateMany({
+        where: { serviceProviderId: spId },
+        data: { isActive: !!isActive },
+      });
+    }
 
     // Update password for user account(s) if newPassword is provided
     let passwordUpdated = false;
@@ -767,51 +835,82 @@ export const updateProvider = async (req: Request, res: Response, next: NextFunc
       }
       const hashedPassword = await bcrypt.hash(newPassword.trim(), 12);
       
-      const spProfile = await prisma.serviceProviderProfile.findUnique({ where: { id: spId } });
-      const phonesToMatch = [spProfile?.primaryContact, spProfile?.secondaryContact].filter(Boolean) as string[];
-      const emailsToMatch = [spProfile?.businessEmail].filter(Boolean) as string[];
-
-      await prisma.user.updateMany({
-        where: {
-          OR: [
-            { serviceProviderId: spId },
-            ...(phonesToMatch.length > 0 ? [{ phone: { in: phonesToMatch } }] : []),
-            ...(emailsToMatch.length > 0 ? [{ email: { in: emailsToMatch } }] : []),
-          ],
-        },
-        data: {
-          password: hashedPassword,
-          mustChangePassword: true,
-        },
-      });
+      if (spAdminUser) {
+        await prisma.user.update({
+          where: { id: spAdminUser.id },
+          data: {
+            password: hashedPassword,
+            mustChangePassword: true,
+          },
+        });
+      }
       passwordUpdated = true;
     }
 
-    // Sync User record phone & email if primaryContact or businessEmail provided
-    if (primaryContact || businessEmail) {
+    // Sync User record phone & email for the primary SP admin account
+    if (spAdminUser && (cleanPrimary || cleanEmail !== undefined)) {
       const userUpdate: any = {};
-      if (primaryContact && primaryContact.trim()) userUpdate.phone = primaryContact.trim();
-      if (businessEmail && businessEmail.trim()) userUpdate.email = businessEmail.trim();
+
+      if (cleanPrimary && cleanPrimary !== spAdminUser.phone) {
+        const existingPhone = await prisma.user.findFirst({
+          where: {
+            phone: cleanPrimary,
+            id: { not: spAdminUser.id },
+          },
+          select: { id: true },
+        });
+        if (existingPhone) {
+          throw new AppError('A user with this phone number already exists', 400);
+        }
+        userUpdate.phone = cleanPrimary;
+      }
+
+      if (cleanEmail !== undefined && cleanEmail !== spAdminUser.email) {
+        if (cleanEmail) {
+          const existingEmail = await prisma.user.findFirst({
+            where: {
+              email: { equals: cleanEmail, mode: 'insensitive' },
+              id: { not: spAdminUser.id },
+            },
+            select: { id: true },
+          });
+          if (existingEmail) {
+            throw new AppError('This email address is already in use by another user', 409);
+          }
+        }
+        userUpdate.email = cleanEmail;
+      }
 
       if (Object.keys(userUpdate).length > 0) {
-        await prisma.user.updateMany({
-          where: { serviceProviderId: spId },
+        await prisma.user.update({
+          where: { id: spAdminUser.id },
           data: userUpdate,
         });
       }
     }
 
     // Sync updated address/city/contact/lat/lng to associated Service records if provided
-    if (address || city || primaryContact || latitude || longitude) {
+    const serviceUpdate: any = {};
+    if (address !== undefined && address !== null) serviceUpdate.address = address.toString().trim();
+    if (city !== undefined && city !== null) serviceUpdate.city = city.toString().trim();
+    if (cleanPrimary) {
+      serviceUpdate.contactNumber = cleanPrimary;
+    } else if (primaryContact !== undefined && primaryContact !== null) {
+      serviceUpdate.contactNumber = primaryContact.toString().trim();
+    }
+    if (latitude !== undefined && latitude !== null && latitude !== '') {
+      const parsedLat = parseFloat(latitude.toString());
+      if (!isNaN(parsedLat)) serviceUpdate.latitude = parsedLat;
+    }
+    if (longitude !== undefined && longitude !== null && longitude !== '') {
+      const parsedLng = parseFloat(longitude.toString());
+      if (!isNaN(parsedLng)) serviceUpdate.longitude = parsedLng;
+    }
+
+    if (Object.keys(serviceUpdate).length > 0) {
       await prisma.service.updateMany({
         where: { serviceProviderId: spId },
-        data: {
-          ...(address && { address: address.trim() }),
-          ...(city && { city: city.trim() }),
-          ...(primaryContact && { contactNumber: primaryContact.trim() }),
-          ...(latitude && { latitude: parseFloat(latitude.toString()) }),
-          ...(longitude && { longitude: parseFloat(longitude.toString()) }),
-        },
+        data: serviceUpdate,
       });
     }
 

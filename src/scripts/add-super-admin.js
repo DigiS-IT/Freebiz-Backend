@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const readline = require('readline');
@@ -29,53 +30,74 @@ async function main() {
     process.exit(1);
   }
 
+  const trimmedPhone = phone.trim();
+  const trimmedEmail = email.trim() || null;
+  const adminName = name.trim() || 'FreeBiz Super Admin';
   const hashedPassword = await bcrypt.hash(password.trim(), 12);
 
-  const user = await prisma.user.upsert({
-    where: { phone: phone.trim() },
-    update: {
-      email: email.trim() || null,
-      password: hashedPassword,
-      role: 'SUPER_ADMIN',
-      isActive: true,
-      mustChangePassword: false,
-      superAdminProfile: {
-        upsert: {
-          create: {
-            name: name.trim() || 'FreeBiz Super Admin',
-          },
-          update: {
-            name: name.trim() || 'FreeBiz Super Admin',
+  // Check if phone or email already belongs to a user
+  const existingByPhone = await prisma.user.findUnique({ where: { phone: trimmedPhone } });
+  const existingByEmail = trimmedEmail ? await prisma.user.findUnique({ where: { email: trimmedEmail } }) : null;
+
+  if (existingByPhone && existingByEmail && existingByPhone.id !== existingByEmail.id) {
+    console.error(
+      `❌ Conflict: Phone '${trimmedPhone}' belongs to user ID (${existingByPhone.id}), ` +
+      `but email '${trimmedEmail}' belongs to a different user ID (${existingByEmail.id}).`
+    );
+    console.error('Please resolve or delete the duplicate record first.');
+    process.exit(1);
+  }
+
+  const targetUser = existingByPhone || existingByEmail;
+  let user;
+
+  if (targetUser) {
+    console.log(`ℹ️  Existing user found (ID: ${targetUser.id}). Updating to Super Admin...`);
+    user = await prisma.user.update({
+      where: { id: targetUser.id },
+      data: {
+        phone: trimmedPhone,
+        email: trimmedEmail,
+        password: hashedPassword,
+        role: 'SUPER_ADMIN',
+        isActive: true,
+        mustChangePassword: false,
+        superAdminProfile: {
+          upsert: {
+            create: { name: adminName },
+            update: { name: adminName },
           },
         },
       },
-    },
-    create: {
-      phone: phone.trim(),
-      email: email.trim() || null,
-      password: hashedPassword,
-      role: 'SUPER_ADMIN',
-      isActive: true,
-      mustChangePassword: false,
-      superAdminProfile: {
-        create: {
-          name: name.trim() || 'FreeBiz Super Admin',
+    });
+  } else {
+    user = await prisma.user.create({
+      data: {
+        phone: trimmedPhone,
+        email: trimmedEmail,
+        password: hashedPassword,
+        role: 'SUPER_ADMIN',
+        isActive: true,
+        mustChangePassword: false,
+        superAdminProfile: {
+          create: { name: adminName },
         },
       },
-    },
-  });
+    });
+  }
 
   console.log(`\n✅ Super Admin created/updated successfully!`);
-  console.log(`- User ID/Phone: ${user.phone}`);
-  console.log(`- Email: ${user.email}`);
-  console.log(`- Role: ${user.role}`);
+  console.log(`- User ID: ${user.id}`);
+  console.log(`- Phone:   ${user.phone}`);
+  console.log(`- Email:   ${user.email || 'N/A'}`);
+  console.log(`- Role:    ${user.role}`);
 }
 
 main()
   .catch((e) => {
     console.error('❌ Error creating Super Admin:', e);
   })
-  .finally(() => {
+  .finally(async () => {
     rl.close();
-    prisma.$disconnect();
+    await prisma.$disconnect();
   });

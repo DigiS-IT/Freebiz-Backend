@@ -62,7 +62,6 @@ enum OtpPurpose {
 model User {
   id                 String    @id @default(uuid())
   name               String?
-  profilePic         String?
   phone              String    @unique
   email              String?   @unique
   password           String?
@@ -76,6 +75,7 @@ model User {
   updatedAt          DateTime  @updatedAt
   magicToken         String?   @unique
   magicTokenExpires  DateTime?
+  profilePic         String?
 
   // Relations - Customer
   customerProfile CustomerProfile?

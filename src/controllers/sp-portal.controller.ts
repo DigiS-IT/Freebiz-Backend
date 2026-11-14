@@ -475,6 +475,106 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
+// Update Service Provider Business Profile (including Profile Picture / Logo)
+export const updateSpProfile = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const spId = req.user!.serviceProviderId;
+    if (!spId) {
+      throw new AppError('Service provider profile not found', 404);
+    }
+
+    const { profilePic, businessName, businessEmail, primaryContact, secondaryContact, address, city, latitude, longitude } = req.body;
+
+    const existingProfile = await prisma.serviceProviderProfile.findUnique({
+      where: { id: spId },
+    });
+    if (!existingProfile) {
+      throw new AppError('Service Provider profile not found', 404);
+    }
+
+    const updateData: Prisma.ServiceProviderProfileUpdateInput = {};
+
+    if (profilePic !== undefined) {
+      updateData.profilePic = profilePic && typeof profilePic === 'string' && profilePic.trim()
+        ? profilePic.trim()
+        : null;
+    }
+
+    if (businessName !== undefined && businessName !== null) {
+      updateData.businessName = businessName.trim();
+    }
+
+    if (businessEmail !== undefined) {
+      updateData.businessEmail = businessEmail && typeof businessEmail === 'string' && businessEmail.trim()
+        ? businessEmail.trim().toLowerCase()
+        : null;
+    }
+
+    if (primaryContact !== undefined && primaryContact !== null) {
+      const rawPrimary = primaryContact.toString().trim();
+      const digits = rawPrimary.replace(/\D/g, '').slice(-10);
+      updateData.primaryContact = digits.length === 10 ? digits : (rawPrimary || null);
+    }
+
+    if (secondaryContact !== undefined) {
+      const rawSecondary = secondaryContact ? secondaryContact.toString().trim() : '';
+      const digits = rawSecondary.replace(/\D/g, '').slice(-10);
+      updateData.secondaryContact = digits.length === 10 ? digits : (rawSecondary || null);
+    }
+
+    if (address !== undefined && address !== null) {
+      updateData.address = address.toString().trim();
+    }
+
+    if (city !== undefined && city !== null) {
+      updateData.city = city.toString().trim();
+    }
+
+    if (latitude !== undefined) {
+      updateData.latitude = latitude !== null ? parseFloat(latitude.toString()) : null;
+    }
+
+    if (longitude !== undefined) {
+      updateData.longitude = longitude !== null ? parseFloat(longitude.toString()) : null;
+    }
+
+    const updatedProfile = await prisma.serviceProviderProfile.update({
+      where: { id: spId },
+      data: updateData,
+    });
+
+    // Also sync user profilePic if updated
+    if (profilePic !== undefined) {
+      await prisma.user.update({
+        where: { id: req.user!.id },
+        data: {
+          profilePic: profilePic && typeof profilePic === 'string' && profilePic.trim()
+            ? profilePic.trim()
+            : null,
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      data: {
+        id: updatedProfile.id,
+        businessName: updatedProfile.businessName,
+        profilePic: updatedProfile.profilePic,
+        primaryContact: updatedProfile.primaryContact,
+        secondaryContact: updatedProfile.secondaryContact,
+        address: updatedProfile.address,
+        city: updatedProfile.city,
+        latitude: updatedProfile.latitude,
+        longitude: updatedProfile.longitude,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Get SP slots and services
 export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

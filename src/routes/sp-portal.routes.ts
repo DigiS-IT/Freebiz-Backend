@@ -15,6 +15,8 @@ router.post('/bookings/:id/cancel', authenticate, spOnly, spController.cancelSpB
 // Profile setup and management
 router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpProfile);
 router.get('/profile', authenticate, spOnly, spController.getSpProfile);
+router.put('/profile', authenticate, spOnly, spController.updateSpProfile);
+router.patch('/profile', authenticate, spOnly, spController.updateSpProfile);
 router.post('/staff', authenticate, spSuperAdminOnly, spController.createSpUser);
 router.get('/staff', authenticate, spSuperAdminOnly, spController.getSpUsers);
 router.put('/staff/:userId', authenticate, spSuperAdminOnly, spController.updateSpUser);

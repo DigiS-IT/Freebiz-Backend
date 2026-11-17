@@ -33,7 +33,7 @@ router.get("/:id", serviceController.getServiceById);
 router.post(
   "/",
   authenticate,
-  spOnly,
+  spOrSuperAdmin,
   validateRequest(createServiceSchema),
   serviceController.createService,
 );
@@ -41,7 +41,7 @@ router.post(
 router.put(
   "/:id",
   authenticate,
-  spOnly,
+  spOrSuperAdmin,
   validateRequest(updateServiceSchema),
   serviceController.updateService,
 );

@@ -686,7 +686,12 @@ export const createService = async (
   next: NextFunction,
 ) => {
   try {
-    const spId = req.user!.serviceProviderId;
+    const role = req.user?.role;
+    const isSuperAdmin = role === "SUPER_ADMIN" || role === "superadmin";
+    const spId = isSuperAdmin
+      ? (req.body.serviceProviderId || req.user?.serviceProviderId)
+      : req.user?.serviceProviderId;
+
     if (!spId) {
       throw new AppError("Service provider profile not found", 400);
     }
@@ -825,14 +830,15 @@ export const createService = async (
       }
     }
     if (serviceType === "DISCOUNTED") {
+      const targetSpId = service.serviceProviderId;
       const sp = await prisma.serviceProviderProfile.findUnique({
-        where: { id: spId },
+        where: { id: targetSpId },
         select: { businessName: true },
       });
       if (sp?.businessName === "Super Service Provider") {
         await prisma.service.updateMany({
           where: {
-            serviceProviderId: spId,
+            serviceProviderId: targetSpId,
             serviceType: "FREE",
           },
           data: {
@@ -864,8 +870,11 @@ export const updateService = async (
   next: NextFunction,
 ) => {
   try {
-    const spId = req.user!.serviceProviderId;
-    if (!spId) {
+    const role = req.user?.role;
+    const isSuperAdmin = role === "SUPER_ADMIN" || role === "superadmin";
+    const spId = req.user?.serviceProviderId;
+
+    if (!isSuperAdmin && !spId) {
       throw new AppError("Service provider profile not found", 400);
     }
 
@@ -888,10 +897,16 @@ export const updateService = async (
       media,
     } = req.body;
 
-    // Verify ownership
+    // Verify ownership or super admin permissions
     const existingService = await prisma.service.findFirst({
-      where: { id, serviceProviderId: spId },
+      where: isSuperAdmin
+        ? { id, isDeleted: false }
+        : { id, serviceProviderId: spId as string, isDeleted: false },
     });
+
+    if (!existingService) {
+      throw new AppError("Service not found", 404);
+    }
 
     if (
       specialInstructions !== undefined &&
@@ -969,14 +984,15 @@ export const updateService = async (
       });
     }
     if (serviceType === "DISCOUNTED") {
+      const targetSpId = service.serviceProviderId;
       const sp = await prisma.serviceProviderProfile.findUnique({
-        where: { id: spId },
+        where: { id: targetSpId },
         select: { businessName: true },
       });
       if (sp?.businessName === "Super Service Provider") {
         await prisma.service.updateMany({
           where: {
-            serviceProviderId: spId,
+            serviceProviderId: targetSpId,
             serviceType: "FREE",
           },
           data: {

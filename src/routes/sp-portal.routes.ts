@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as spController from '../controllers/sp-portal.controller';
 import * as serviceController from '../controllers/service.controller';
 import { authenticate } from '../middlewares/auth.middleware';
-import { spOnly, spSuperAdminOnly } from '../middlewares/role.middleware';
+import { spOnly, spSuperAdminOnly, spOrSuperAdmin } from '../middlewares/role.middleware';
 
 const router: Router = Router();
 
@@ -14,7 +14,7 @@ router.post('/bookings/:id/cancel', authenticate, spOnly, spController.cancelSpB
 
 // Profile setup and management
 router.post('/profile', authenticate, spSuperAdminOnly, spController.createSpProfile);
-router.get('/profile', authenticate, spOnly, spController.getSpProfile);
+router.get('/profile', authenticate, spOrSuperAdmin, spController.getSpProfile);
 router.put('/profile', authenticate, spOnly, spController.updateSpProfile);
 router.patch('/profile', authenticate, spOnly, spController.updateSpProfile);
 router.post('/staff', authenticate, spSuperAdminOnly, spController.createSpUser);
@@ -24,14 +24,14 @@ router.delete('/staff/:userId', authenticate, spSuperAdminOnly, spController.del
 router.put('/staff/:userId/password', authenticate, spSuperAdminOnly, spController.updateSpUserPassword);
 
 // Slot management
-router.get('/slots', authenticate, spOnly, spController.getSpSlots);
-router.post('/slots', authenticate, spOnly, spController.createSpSlot);
-router.put('/slots', authenticate, spOnly, spController.updateSpSlot);
+router.get('/slots', authenticate, spOrSuperAdmin, spController.getSpSlots);
+router.post('/slots', authenticate, spOrSuperAdmin, spController.createSpSlot);
+router.put('/slots', authenticate, spOrSuperAdmin, spController.updateSpSlot);
 
 // Services management
-router.get('/services', authenticate, spOnly, spController.getSpSlots);
-router.post('/services', authenticate, spOnly, serviceController.createService);
-router.put('/services/:id', authenticate, spOnly, serviceController.updateService);
-router.delete('/services/:id', authenticate, spOnly, serviceController.deleteService);
+router.get('/services', authenticate, spOrSuperAdmin, spController.getSpSlots);
+router.post('/services', authenticate, spOrSuperAdmin, serviceController.createService);
+router.put('/services/:id', authenticate, spOrSuperAdmin, serviceController.updateService);
+router.delete('/services/:id', authenticate, spOrSuperAdmin, serviceController.deleteService);
 
 export default router;

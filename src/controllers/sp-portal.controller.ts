@@ -359,7 +359,10 @@ export const createSpProfile = async (req: AuthRequest, res: Response, next: Nex
 // Get Service Provider Business Profile & Review Aggregates
 export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const spId = req.user!.serviceProviderId;
+    const role = req.user?.role;
+    const isSuperAdmin = role === 'SUPER_ADMIN' || role === 'superadmin';
+    const querySpId = req.query.spId as string;
+    const spId = isSuperAdmin ? (querySpId || req.user?.serviceProviderId) : req.user?.serviceProviderId;
 
     if (!spId) {
       throw new AppError('Service provider profile not set up yet', 404);
@@ -578,14 +581,24 @@ export const updateSpProfile = async (req: AuthRequest, res: Response, next: Nex
 // Get SP slots and services
 export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const spId = req.user!.serviceProviderId;
-    if (!spId) {
-      return res.status(200).json({ success: true, services: [] });
+    const role = req.user?.role;
+    const isSuperAdmin = role === 'SUPER_ADMIN' || role === 'superadmin';
+    const querySpId = req.query.spId as string;
+    const spId = isSuperAdmin ? (querySpId || req.user?.serviceProviderId) : req.user?.serviceProviderId;
+
+    if (!spId && !isSuperAdmin) {
+      return res.status(200).json({ success: true, services: [], slots: [] });
+    }
+
+    const whereClause: any = { isDeleted: false };
+    if (spId) {
+      whereClause.serviceProviderId = spId;
     }
 
     const services = await prisma.service.findMany({
-      where: { serviceProviderId: spId, isDeleted: false },
+      where: whereClause,
       include: { 
+        serviceProvider: { select: { id: true, businessName: true } },
         slots: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
         media: { orderBy: { order: 'asc' } },
       },
@@ -647,6 +660,8 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
         specialInstructions: s.specialInstructions,
         termsAndConditions: s.termsAndConditions,
         parentId: s.parentId,
+        serviceProviderId: s.serviceProviderId,
+        serviceProviderName: s.serviceProvider?.businessName || 'Service Provider',
         media: s.media.map(m => ({
           id: m.id,
           mediaType: m.mediaType,

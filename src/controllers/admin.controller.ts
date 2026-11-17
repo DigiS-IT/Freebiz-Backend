@@ -1003,7 +1003,8 @@ export const getBookingReport = async (req: Request, res: Response, next: NextFu
     const toDate = typeof req.query.toDate === 'string' && req.query.toDate ? req.query.toDate : undefined;
     const singleDate = typeof req.query.date === 'string' && req.query.date ? req.query.date : undefined;
     const dateType = typeof req.query.dateType === 'string' && req.query.dateType === 'createdAt' ? 'createdAt' : 'bookingDate';
-    const statusParam = typeof req.query.status === 'string' ? req.query.status.toLowerCase() : undefined;
+    const statusParam =
+      typeof req.query.status === 'string' ? req.query.status.toLowerCase() : undefined;
 
     const where: any = {};
 
@@ -1012,17 +1013,24 @@ export const getBookingReport = async (req: Request, res: Response, next: NextFu
       where.service = { serviceProviderId: providerId };
     }
 
-    // Status filter
-    if (statusParam && statusParam !== 'all') {
-      if (statusParam === 'active') {
-        where.status = { in: [BookingStatus.BOOKED, BookingStatus.USED] };
-      } else {
-        const upper = statusParam.toUpperCase();
-        if (Object.values(BookingStatus).includes(upper as BookingStatus)) {
-          where.status = upper as BookingStatus;
+    // Status filter (supports comma-separated multi-select, e.g. "booked,used")
+    const statusValues = statusParam ? statusParam.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    if (statusValues.length > 0) {
+      const statuses: BookingStatus[] = [];
+      for (const raw of statusValues) {
+        if (raw === 'active') {
+          statuses.push(BookingStatus.BOOKED, BookingStatus.USED);
+        } else {
+          const upper = raw.toUpperCase();
+          if (Object.values(BookingStatus).includes(upper as BookingStatus)) {
+            statuses.push(upper as BookingStatus);
+          }
         }
       }
-    } else if (!statusParam) {
+      // Deduplicate
+      const uniqueStatuses = [...new Set(statuses)];
+      where.status = { in: uniqueStatuses };
+    } else {
       // Default: booked and used bookings
       where.status = { in: [BookingStatus.BOOKED, BookingStatus.USED] };
     }

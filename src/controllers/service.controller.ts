@@ -285,6 +285,7 @@ export const getServices = async (
           id: s.id,
           businessName: s.serviceProvider.businessName,
           serviceType: s.serviceType,
+          serviceName: s.serviceName || s.serviceDetail.slice(0, 20),
           serviceDetail: s.serviceDetail,
           contactNumber: s.contactNumber,
           address: s.address,
@@ -322,6 +323,7 @@ export const getServices = async (
             ? s.subServices.map((sub: any) => ({
                 id: sub.id,
                 serviceType: sub.serviceType,
+                serviceName: sub.serviceName || sub.serviceDetail.slice(0, 20),
                 serviceDetail: sub.serviceDetail,
                 contactNumber: sub.contactNumber,
                 address: sub.address,
@@ -546,6 +548,7 @@ export const getServiceById = async (
         id: service.id,
         businessName: service.serviceProvider.businessName,
         serviceType: service.serviceType,
+        serviceName: service.serviceName || service.serviceDetail.slice(0, 20),
         serviceDetail: service.serviceDetail,
         contactNumber: service.contactNumber,
         address: service.address,
@@ -573,6 +576,7 @@ export const getServiceById = async (
           ? (service as any).subServices.map((sub: any) => ({
               id: sub.id,
               serviceType: sub.serviceType,
+              serviceName: sub.serviceName || sub.serviceDetail.slice(0, 20),
               serviceDetail: sub.serviceDetail,
               contactNumber: sub.contactNumber,
               address: sub.address,
@@ -698,6 +702,7 @@ export const createService = async (
 
     const {
       serviceType,
+      serviceName,
       serviceDetail,
       contactNumber,
       address,
@@ -735,6 +740,11 @@ export const createService = async (
       );
     }
 
+    const sanitizedServiceName =
+      serviceName && typeof serviceName === "string" && serviceName.trim().length > 0
+        ? serviceName.trim().slice(0, 20)
+        : (serviceDetail ? serviceDetail.trim().slice(0, 20) : null);
+
     // Check if a previously deleted service with the same name and type exists for this SP
     const existingDeletedService = await prisma.service.findFirst({
       where: {
@@ -750,6 +760,7 @@ export const createService = async (
       service = await prisma.service.update({
         where: { id: existingDeletedService.id },
         data: {
+          serviceName: sanitizedServiceName,
           serviceDetail: serviceDetail.trim(),
           contactNumber,
           address,
@@ -793,6 +804,7 @@ export const createService = async (
         data: {
           serviceProviderId: spId,
           serviceType,
+          serviceName: sanitizedServiceName,
           serviceDetail: serviceDetail.trim(),
           contactNumber,
           address,
@@ -881,6 +893,7 @@ export const updateService = async (
     const { id } = req.params;
     const {
       serviceType,
+      serviceName,
       serviceDetail,
       contactNumber,
       address,
@@ -941,6 +954,14 @@ export const updateService = async (
       where: { id },
       data: {
         serviceType,
+        ...(serviceName !== undefined
+          ? {
+              serviceName:
+                typeof serviceName === "string" && serviceName.trim().length > 0
+                  ? serviceName.trim().slice(0, 20)
+                  : (serviceDetail ? serviceDetail.trim().slice(0, 20) : null),
+            }
+          : {}),
         serviceDetail,
         contactNumber,
         address,

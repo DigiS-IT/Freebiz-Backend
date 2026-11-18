@@ -331,7 +331,8 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
 
           return {
             id: s.id,
-            name: s.serviceDetail.split(' - ')[0] || (s.serviceType === 'FREE' ? 'Free Service Pass' : 'Discounted Service Session'),
+            name: s.serviceName || s.serviceDetail.split(' - ')[0] || (s.serviceType === 'FREE' ? 'Free Service Pass' : 'Discounted Service Session'),
+            serviceName: s.serviceName || s.serviceDetail.slice(0, 20),
             spName: s.serviceProvider.businessName,
             description: s.specialInstructions || s.serviceDetail || 'Service offered by provider',
             type: s.serviceType,
@@ -531,7 +532,8 @@ export const getProviders = async (req: Request, res: Response, next: NextFuncti
         registeredOn: p.createdAt.toISOString(),
         services: p.services.map((s) => ({
           id: s.id,
-          name: s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
+          name: s.serviceName || s.serviceDetail.slice(0, 20) || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
+          serviceName: s.serviceName || s.serviceDetail.slice(0, 20),
           type: s.serviceType.toLowerCase(),
           discountPercentage: s.discountPercentage,
         })),
@@ -1096,7 +1098,7 @@ export const getBookingReport = async (req: Request, res: Response, next: NextFu
           customerName: booking.customer?.name || 'Customer',
           customerPhone: booking.customer?.user?.phone || 'No phone',
           customerEmail: booking.customer?.user?.email || null,
-          serviceName: booking.service?.serviceDetail || 'Service',
+          serviceName: (booking.service as any)?.serviceName || booking.service?.serviceDetail?.slice(0, 20) || 'Service',
           serviceType: (booking.service?.serviceType || 'FREE').toLowerCase(),
           providerId: booking.service?.serviceProvider?.id || '',
           providerName: booking.service?.serviceProvider?.businessName || 'Service Provider',
@@ -1232,6 +1234,7 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
           where: { isDeleted: false },
           select: {
             id: true,
+            serviceName: true,
             serviceDetail: true,
             serviceType: true,
             serviceMode: true,
@@ -1279,6 +1282,8 @@ export const getExpiryTracking = async (req: Request, res: Response, next: NextF
         servicesCount: p.services.length,
         services: p.services.map((s) => ({
           id: s.id,
+          name: s.serviceName || s.serviceDetail.slice(0, 20),
+          serviceName: s.serviceName || s.serviceDetail.slice(0, 20),
           detail: s.serviceDetail,
           type: s.serviceType,
           mode: s.serviceMode,

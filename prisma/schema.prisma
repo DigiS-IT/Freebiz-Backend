@@ -196,6 +196,7 @@ model Service {
   id                  String      @id @default(uuid())
   serviceProviderId   String
   serviceType         ServiceType // FREE or DISCOUNTED
+  serviceName         String?     @db.VarChar(20)
   serviceDetail       String      @db.Text
   contactNumber       String
   address             String      @db.Text

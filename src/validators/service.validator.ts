@@ -14,6 +14,7 @@ export const getServicesSchema = z.object({
 
 export const createServiceSchema = z.object({
   serviceType: z.enum(["FREE", "DISCOUNTED"]),
+  serviceName: z.string().max(20, "Service name cannot exceed 20 characters").optional().nullable(),
   serviceDetail: z.string().min(10),
   contactNumber: z.string(),
   address: z.string(),
@@ -48,6 +49,7 @@ export const createServiceSchema = z.object({
 
 export const updateServiceSchema = z.object({
   serviceType: z.enum(["FREE", "DISCOUNTED"]).optional(),
+  serviceName: z.string().max(20, "Service name cannot exceed 20 characters").optional().nullable(),
   serviceDetail: z.string().min(10).optional(),
   contactNumber: z.string().optional(),
   address: z.string().optional(),

@@ -57,7 +57,8 @@ export const getSpDashboard = async (req: AuthRequest, res: Response, next: Next
       const cancelledCount = s.bookings.filter((b) => b.status === 'CANCELLED').length;
       return {
         id: s.id,
-        name: s.serviceDetail.split(' - ')[0] || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
+        name: s.serviceName || s.serviceDetail.split(' - ')[0] || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'),
+        serviceName: s.serviceName || s.serviceDetail.slice(0, 20),
         type: s.serviceType.toLowerCase(),
         totalSlotCount,
         bookedCount,
@@ -380,6 +381,7 @@ export const getSpProfile = async (req: AuthRequest, res: Response, next: NextFu
           where: { isDeleted: false },
           select: {
             id: true,
+            serviceName: true,
             serviceDetail: true,
             serviceType: true,
             contactNumber: true,
@@ -606,7 +608,9 @@ export const getSpSlots = async (req: AuthRequest, res: Response, next: NextFunc
 
     const allSlots: any[] = [];
     const formatted = services.map((s) => {
-      const serviceName = s.serviceDetail || (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service');
+      const serviceName = (s.serviceName && s.serviceName.trim().length > 0)
+        ? s.serviceName.trim()
+        : (s.serviceDetail ? s.serviceDetail.slice(0, 20) : (s.serviceType === 'FREE' ? 'Free Service' : 'Discounted Service'));
       const serviceType = s.serviceType.toLowerCase();
       const serviceLogo = s.media.find(m => m.mediaType === 'PHOTO')?.thumbnailUrl || s.media.find(m => m.mediaType === 'PHOTO')?.mediaUrl || s.media[0]?.mediaUrl || null;
 
